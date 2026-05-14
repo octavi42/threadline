@@ -5,53 +5,64 @@ enum CodexSource {
         let fm = FileManager.default
         let root = (fm.homeDirectoryForCurrentUser.path as NSString)
             .appendingPathComponent(".codex/sessions")
-        var snap = SourceSnapshot(id: "codex", tool: "Codex")
+        var snap = SourceSnapshot(id: "codex", tool: "Codex", badge: "CDX")
 
-        // Find newest .jsonl recursively (skip the legacy flat .json files).
         guard let url = newestJSONL(under: URL(fileURLWithPath: root)) else {
-            snap.status = "no session"
+            snap.state = .none; snap.note = "no session"
             return snap
         }
         if let m = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date {
             snap.updatedAt = m
         }
-        snap.status = "ok"
 
-        guard let tail = tailOfFile(path: url.path, maxBytes: 48 * 1024) else {
-            return snap
-        }
-        var meta: (cwd: String?, model: String?)?
-        var lastAssistant: (text: String, ts: Date?)?
-        var lastUser: (text: String, ts: Date?)?
+        guard let tail = tailOfFile(path: url.path, maxBytes: 64 * 1024) else { return snap }
+
+        var cwd: String?
+        var model: String?
+        var contextLimit: Int?
+        var lastAssistant: String?
+        var lastUser: String?
+        var lastTokenUsage: (input: Int, cached: Int, output: Int)?
+        var sawStartedAfterComplete = false
 
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = raw.data(using: .utf8),
+            guard let data = String(raw).data(using: .utf8),
                   let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
             let type = rec["type"] as? String ?? ""
             let payload = rec["payload"] as? [String: Any] ?? [:]
-            let ts = (rec["timestamp"] as? String).flatMap(ClaudeSource.parseISO)
-
             switch type {
             case "session_meta":
-                meta = (payload["cwd"] as? String,
-                        (payload["model"] as? String) ?? (payload["model_provider"] as? String))
+                cwd = payload["cwd"] as? String
+                if let m = payload["model"] as? String { model = m }
+                if let limit = payload["model_context_window"] as? Int { contextLimit = limit }
             case "event_msg":
-                if payload["type"] as? String == "agent_message",
-                   let msg = payload["message"] as? String, !msg.isEmpty {
-                    lastAssistant = (msg, ts)
-                } else if payload["type"] as? String == "user_message",
-                          let msg = payload["message"] as? String, !msg.isEmpty {
-                    lastUser = (msg, ts)
+                let etype = payload["type"] as? String
+                if etype == "task_started"  { sawStartedAfterComplete = true }
+                if etype == "task_complete" { sawStartedAfterComplete = false }
+                if etype == "agent_message", let m = payload["message"] as? String, !m.isEmpty {
+                    lastAssistant = m
+                }
+                if etype == "user_message",  let m = payload["message"] as? String, !m.isEmpty {
+                    lastUser = m
+                }
+                if etype == "token_count", let info = payload["info"] as? [String: Any] {
+                    let i = (info["input_tokens"]         as? Int) ?? 0
+                    let c = (info["cached_input_tokens"]  as? Int) ?? 0
+                    let o = (info["output_tokens"]        as? Int) ?? 0
+                    if i + c + o > 0 { lastTokenUsage = (i, c, o) }
+                }
+                if etype == "task_started", let cw = payload["context_window"] as? Int {
+                    contextLimit = cw
                 }
             case "response_item":
                 if payload["type"] as? String == "message" {
                     let role = payload["role"] as? String
                     let content = payload["content"] as? [[String: Any]] ?? []
-                    let text = content.compactMap { ($0["text"] as? String) }.joined(separator: " ")
+                    let text = content.compactMap { $0["text"] as? String }.joined(separator: " ")
                     if !text.isEmpty {
-                        if role == "assistant" { lastAssistant = (text, ts) }
-                        else if role == "user" { lastUser = (text, ts) }
+                        if role == "assistant" { lastAssistant = text }
+                        else if role == "user" { lastUser = text }
                     }
                 }
             default:
@@ -59,27 +70,23 @@ enum CodexSource {
             }
         }
 
-        // Head-of-file metadata (cwd/model) if tail missed it.
-        if meta == nil, let head = headOfFile(path: url.path, maxBytes: 8 * 1024) {
-            for raw in head.split(separator: "\n", omittingEmptySubsequences: true) {
-                if let data = raw.data(using: .utf8),
-                   let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   rec["type"] as? String == "session_meta",
-                   let p = rec["payload"] as? [String: Any] {
-                    meta = (p["cwd"] as? String, p["model"] as? String)
-                    break
-                }
-            }
+        snap.cwd = cwd
+        snap.model = model
+        snap.lastText = lastAssistant ?? lastUser
+
+        let ageSec = snap.updatedAt.map { -$0.timeIntervalSinceNow } ?? 999_999
+        if sawStartedAfterComplete && ageSec < 30 { snap.state = .running }
+        else if ageSec < 5                          { snap.state = .running }
+        else if ageSec > 300                        { snap.state = .stale }
+        else                                        { snap.state = .idle }
+
+        if let u = lastTokenUsage, let limit = contextLimit, limit > 0 {
+            snap.contextPercent = min(1.0, Double(u.input + u.cached) / Double(limit))
         }
 
-        snap.cwd = meta?.cwd
-        snap.model = meta?.model
-        if let a = lastAssistant {
-            snap.lastRole = "assistant"; snap.lastText = a.text
-            if let t = a.ts { snap.updatedAt = t }
-        } else if let u = lastUser {
-            snap.lastRole = "user"; snap.lastText = u.text
-            if let t = u.ts { snap.updatedAt = t }
+        if let c = cwd, let info = Git.info(cwd: c) {
+            snap.branch = info.branch
+            snap.dirtyCount = info.dirty
         }
         return snap
     }
@@ -99,11 +106,4 @@ enum CodexSource {
         }
         return best?.0
     }
-}
-
-func headOfFile(path: String, maxBytes: Int) -> String? {
-    guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
-    defer { try? fh.close() }
-    let data = fh.readData(ofLength: maxBytes)
-    return String(data: data, encoding: .utf8)
 }

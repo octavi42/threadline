@@ -27,7 +27,7 @@ final class OverlayController {
         let initialSize = NSSize(width: 600, height: bannerHeight)
         let panel = FloatingPanel(
             contentRect: NSRect(origin: .zero, size: initialSize),
-            styleMask: [.nonactivatingPanel, .hudWindow, .utilityWindow, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -37,11 +37,9 @@ final class OverlayController {
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.worksWhenModal = true
-        panel.titlebarAppearsTransparent = true
-        panel.titleVisibility = .hidden
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
 
         let host = NSHostingView(rootView: ContentView(model: model))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -98,11 +96,13 @@ final class OverlayController {
             if followEnabled {
                 if panel.isVisible { panel.orderOut(nil) }
             } else {
+                model.setAnchor(bundleID: nil)
                 if !panel.isVisible { panel.orderFrontRegardless() }
                 positionTopOfScreen()
             }
             return
         }
+        model.setAnchor(bundleID: target.bundleID)
         anchor(to: target)
         if !panel.isVisible { panel.orderFrontRegardless() }
     }

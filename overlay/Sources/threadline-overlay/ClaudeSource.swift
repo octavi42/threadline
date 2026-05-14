@@ -5,14 +5,14 @@ enum ClaudeSource {
         let fm = FileManager.default
         let root = (fm.homeDirectoryForCurrentUser.path as NSString)
             .appendingPathComponent(".claude/projects")
-        var snap = SourceSnapshot(id: "claude", tool: "Claude")
+        var snap = SourceSnapshot(id: "claude", tool: "Claude", badge: "CLD")
 
         guard let projects = try? fm.contentsOfDirectory(atPath: root) else {
-            snap.status = "no session"
+            snap.state = .none; snap.note = "no session"
             return snap
         }
 
-        // Find newest JSONL across all project subdirs.
+        // Newest JSONL across all project subdirs.
         var newest: (path: String, mtime: Date)?
         for proj in projects {
             let projDir = (root as NSString).appendingPathComponent(proj)
@@ -21,95 +21,173 @@ enum ClaudeSource {
                 let path = (projDir as NSString).appendingPathComponent(f)
                 if let attrs = try? fm.attributesOfItem(atPath: path),
                    let m = attrs[.modificationDate] as? Date {
-                    if newest == nil || m > newest!.mtime {
-                        newest = (path, m)
-                    }
+                    if newest == nil || m > newest!.mtime { newest = (path, m) }
                 }
             }
         }
         guard let pick = newest else {
-            snap.status = "no session"
+            snap.state = .none; snap.note = "no session"
             return snap
         }
         snap.updatedAt = pick.mtime
-        snap.status = "ok"
 
-        // Read the tail of the file (last ~32KB) and parse JSONL lines.
-        guard let tail = tailOfFile(path: pick.path, maxBytes: 32 * 1024) else {
+        // Read a chunky tail; sessions average a few KB/turn so 128KB ≈ several turns.
+        guard let tail = tailOfFile(path: pick.path, maxBytes: 128 * 1024) else {
             return snap
         }
-        var lastAssistant: (text: String, model: String?, cwd: String?, ts: Date?)?
-        var lastUser: (text: String, cwd: String?, ts: Date?)?
+
+        var cwd: String?
+        var model: String?
+        var lastAssistantText: String?
+        var lastUserText: String?
+        var lastToolUseName: String?
+        var lastToolUseInput: [String: Any]?
+        var lastTodos: [[String: Any]] = []
+        var lastRecordRole: String?
+        var totals = TokenTotals()
+
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = raw.data(using: .utf8),
+            guard let data = String(raw).data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
-            guard let type = obj["type"] as? String else { continue }
-            let cwd = obj["cwd"] as? String
-            let ts = (obj["timestamp"] as? String).flatMap(Self.parseISO)
-            if type == "user" || type == "assistant",
-               let msg = obj["message"] as? [String: Any] {
-                let role = msg["role"] as? String ?? type
-                let model = msg["model"] as? String
-                let text = extractText(msg["content"]) ?? ""
-                if role == "assistant" && !text.isEmpty {
-                    lastAssistant = (text, model, cwd, ts)
-                } else if role == "user" && !text.isEmpty && !text.hasPrefix("<") {
-                    lastUser = (text, cwd, ts)
+            let type = obj["type"] as? String ?? ""
+            if let c = obj["cwd"] as? String { cwd = c }
+            let msg = obj["message"] as? [String: Any] ?? [:]
+            if let m = msg["model"] as? String { model = m }
+
+            if type == "assistant" || type == "user" {
+                lastRecordRole = type
+            }
+
+            // Accumulate token usage (assistant turns only carry it).
+            if let usage = msg["usage"] as? [String: Any] {
+                totals.add(usage)
+            }
+
+            // Scan content blocks for text / tool_use.
+            if let content = msg["content"] as? [[String: Any]] {
+                for block in content {
+                    let btype = block["type"] as? String
+                    switch btype {
+                    case "text":
+                        if let t = block["text"] as? String,
+                           !t.isEmpty,
+                           msg["role"] as? String == "assistant" {
+                            lastAssistantText = t
+                        } else if let t = block["text"] as? String,
+                                  msg["role"] as? String == "user",
+                                  !t.isEmpty,
+                                  !t.hasPrefix("<") {
+                            lastUserText = t
+                        }
+                    case "tool_use":
+                        if let name = block["name"] as? String {
+                            lastToolUseName = name
+                            lastToolUseInput = block["input"] as? [String: Any]
+                            // Capture todos when this is the TodoWrite tool.
+                            if name == "TodoWrite",
+                               let input = block["input"] as? [String: Any],
+                               let todos = input["todos"] as? [[String: Any]] {
+                                lastTodos = todos
+                            }
+                        }
+                    default:
+                        break
+                    }
                 }
             }
         }
-        if let a = lastAssistant {
-            snap.lastRole = "assistant"
-            snap.lastText = a.text
-            snap.model = a.model
-            snap.cwd = a.cwd
-            if let t = a.ts { snap.updatedAt = t }
-        } else if let u = lastUser {
-            snap.lastRole = "user"
-            snap.lastText = u.text
-            snap.cwd = u.cwd
-            if let t = u.ts { snap.updatedAt = t }
+
+        snap.cwd = cwd
+        snap.model = model
+        snap.note = nil
+
+        // State heuristic: assistant turn very recently → running; otherwise idle.
+        let ageSec = -pick.mtime.timeIntervalSinceNow
+        if ageSec < 3                          { snap.state = .running }
+        else if lastRecordRole == "user"       { snap.state = .awaiting }
+        else if ageSec > 300                   { snap.state = .stale }
+        else                                   { snap.state = .idle }
+
+        // Current task = first TODO with status == in_progress.
+        if let active = lastTodos.first(where: { ($0["status"] as? String) == "in_progress" }),
+           let title = active["content"] as? String {
+            snap.currentTask = title
         }
+
+        // Last tool action, formatted "Tool target".
+        if let name = lastToolUseName {
+            snap.lastTool = describe(tool: name, input: lastToolUseInput)
+        }
+
+        // Last text fallback (used when no task/tool).
+        snap.lastText = lastAssistantText ?? lastUserText
+
+        // Token-based context % and cost.
+        let inContext = totals.lastInContextTokens()
+        if let limit = model.flatMap({ ContextLimits.limit(for: $0) }), limit > 0 {
+            snap.contextPercent = min(1.0, Double(inContext) / Double(limit))
+        }
+        if let m = model {
+            snap.costUSD = Pricing.usd(model: m,
+                                       input: totals.input,
+                                       output: totals.output,
+                                       cacheCreate: totals.cacheCreate,
+                                       cacheRead: totals.cacheRead)
+        }
+
+        // Git for the project's cwd.
+        if let c = cwd, let info = Git.info(cwd: c) {
+            snap.branch = info.branch
+            snap.dirtyCount = info.dirty
+        }
+
         return snap
     }
 
-    /// Claude content blocks: [{type: "text", text: "..."}, {type: "tool_use", ...}, ...]
-    /// We return the concatenated text blocks.
-    private static func extractText(_ content: Any?) -> String? {
-        if let s = content as? String { return s }
-        guard let arr = content as? [[String: Any]] else { return nil }
-        var out: [String] = []
-        for block in arr {
-            if block["type"] as? String == "text", let t = block["text"] as? String {
-                out.append(t)
-            }
+    /// Render "Edit Panel.swift", "Bash ls -la", "Read x.txt" etc.
+    private static func describe(tool: String, input: [String: Any]?) -> String {
+        guard let input = input else { return tool }
+        let target: String
+        if let p = input["file_path"] as? String {
+            target = (p as NSString).lastPathComponent
+        } else if let c = input["command"] as? String {
+            target = c.split(separator: "\n").first.map(String.init) ?? c
+        } else if let q = input["pattern"] as? String {
+            target = q
+        } else if let q = input["query"] as? String {
+            target = q
+        } else if tool == "TodoWrite", let todos = input["todos"] as? [[String: Any]] {
+            target = "\(todos.count) item\(todos.count == 1 ? "" : "s")"
+        } else {
+            target = ""
         }
-        let joined = out.joined(separator: " ")
-        return joined.isEmpty ? nil : joined
-    }
-
-    static func parseISO(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
+        return target.isEmpty ? tool : "\(tool) \(target)"
     }
 }
 
-/// Read the last `maxBytes` bytes of a file as UTF-8 (best-effort).
-func tailOfFile(path: String, maxBytes: Int) -> String? {
-    guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
-    defer { try? fh.close() }
-    let size: UInt64
-    do {
-        size = try fh.seekToEnd()
-    } catch { return nil }
-    let offset: UInt64 = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
-    do {
-        try fh.seek(toOffset: offset)
-    } catch { return nil }
-    let data = fh.availableData
-    return String(data: data, encoding: .utf8)
+/// Running token totals across the parsed tail. The "in-context" value is the
+/// LAST observed turn's input + cache_read + cache_creation (what was paid for
+/// to keep loaded), since prior turns rolled into cache_read.
+private struct TokenTotals {
+    var input = 0
+    var output = 0
+    var cacheCreate = 0
+    var cacheRead = 0
+    var lastInput = 0
+    var lastCacheCreate = 0
+    var lastCacheRead = 0
+
+    mutating func add(_ usage: [String: Any]) {
+        let i  = (usage["input_tokens"]                as? Int) ?? 0
+        let o  = (usage["output_tokens"]               as? Int) ?? 0
+        let cc = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+        let cr = (usage["cache_read_input_tokens"]     as? Int) ?? 0
+        input += i; output += o; cacheCreate += cc; cacheRead += cr
+        lastInput = i; lastCacheCreate = cc; lastCacheRead = cr
+    }
+
+    func lastInContextTokens() -> Int {
+        lastInput + lastCacheCreate + lastCacheRead
+    }
 }

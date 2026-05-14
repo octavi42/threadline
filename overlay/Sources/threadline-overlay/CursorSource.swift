@@ -11,33 +11,28 @@ enum CursorSource {
     }
 
     static func read() -> SourceSnapshot {
-        var snap = SourceSnapshot(id: "cursor", tool: "Cursor")
+        var snap = SourceSnapshot(id: "cursor", tool: "Cursor", badge: "CUR")
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: basePath) else {
-            snap.status = "no session"
+            snap.state = .none; snap.note = "no session"
             return snap
         }
 
-        // Find newest workspace by state.vscdb mtime.
         var best: (dir: String, mtime: Date)?
         for e in entries {
             let db = (basePath as NSString)
                 .appendingPathComponent(e)
                 .appending("/state.vscdb")
             if let m = (try? fm.attributesOfItem(atPath: db))?[.modificationDate] as? Date {
-                if best == nil || m > best!.mtime {
-                    best = (e, m)
-                }
+                if best == nil || m > best!.mtime { best = (e, m) }
             }
         }
         guard let pick = best else {
-            snap.status = "no session"
+            snap.state = .none; snap.note = "no session"
             return snap
         }
         snap.updatedAt = pick.mtime
-        snap.status = "ok"
 
-        // Resolve workspace folder from workspace.json.
         let wsJson = (basePath as NSString)
             .appendingPathComponent(pick.dir)
             .appending("/workspace.json")
@@ -49,6 +44,14 @@ enum CursorSource {
                 .removingPercentEncoding ?? folder
         }
         snap.lastText = "workspace active"
+
+        let ageSec = -pick.mtime.timeIntervalSinceNow
+        snap.state = ageSec > 300 ? .stale : .idle
+
+        if let c = snap.cwd, let info = Git.info(cwd: c) {
+            snap.branch = info.branch
+            snap.dirtyCount = info.dirty
+        }
         return snap
     }
 }
