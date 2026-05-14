@@ -371,7 +371,7 @@ private struct SummaryView: View {
                 Text("Summarizing this session…")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
-                Text("Set ANTHROPIC_API_KEY or write to ~/.threadline/config.json with {\"anthropic_api_key\":\"sk-ant-…\"} to enable LLM summaries (claude-haiku-4-5, cached per session).")
+                Text("Uses your installed `claude` (-p, model: haiku) or `codex exec`, whichever is on PATH — no separate API key needed. Falls back to ANTHROPIC_API_KEY if both CLIs are missing.")
                     .font(.system(size: 11, design: .default))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
