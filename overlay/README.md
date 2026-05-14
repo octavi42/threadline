@@ -31,6 +31,11 @@ Recording.
 
 ## Use
 
+Default global hotkey: **⌃⌥⌘T** (Control + Option + Command + T) toggles the
+panel from anywhere. No permission prompt — it's registered via Carbon's
+`RegisterEventHotKey`. Override by setting `THREADLINE_HOTKEY` in the
+LaunchAgent environment (e.g. `ctrl+opt+cmd+\\`, `cmd+shift+f19`).
+
 ```bash
 threadline-overlay toggle    # enable/disable follow mode
 threadline-overlay show      # peek for 8s

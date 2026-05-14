@@ -6,6 +6,7 @@ enum Daemon {
     private static var controller: OverlayController?
     private static var model: SessionModel?
     private static var listenerFD: Int32 = -1
+    private static var hotKey: HotKey?
 
     static func run() {
         // Single-instance guard: if a daemon is already listening, bail out.
@@ -26,6 +27,10 @@ enum Daemon {
         controller = c
 
         startSocketListener()
+
+        let hk = HotKey { [weak c = controller] in c?.toggle() }
+        hk.register()
+        hotKey = hk
 
         app.run()
     }
