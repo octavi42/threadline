@@ -54,8 +54,21 @@ enum CodexSource {
         return nil
     }
 
+    /// Build a snapshot for a specific JSONL — used by LiveAgents to produce
+    /// one row per live tab. Reads the head to find session_meta.cwd, then
+    /// delegates to the existing snapshot builder.
+    static func snapshot(forJSONL path: String) -> SourceSnapshot? {
+        let url = URL(fileURLWithPath: path)
+        guard let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+              let cwd = readSessionCwd(at: url)
+        else { return nil }
+        return snapshot(at: url, mtime: mtime, knownCwd: cwd)
+    }
+
     private static func snapshot(at url: URL, mtime: Date, knownCwd: String) -> SourceSnapshot? {
-        var snap = SourceSnapshot(id: "codex:\(knownCwd)",
+        // ID is the absolute JSONL path so each tab is uniquely addressable
+        // even when multiple tabs share the same project (cwd).
+        var snap = SourceSnapshot(id: "codex:\(url.path)",
                                   tool: "Codex",
                                   badge: "CDX")
         snap.updatedAt = mtime

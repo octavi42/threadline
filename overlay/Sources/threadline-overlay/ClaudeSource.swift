@@ -29,13 +29,26 @@ enum ClaudeSource {
         return out
     }
 
+    /// Build a snapshot for a specific JSONL file. Used by LiveAgents to
+    /// produce one row per *live tab*, since multiple tabs in the same
+    /// project directory each have their own JSONL.
+    static func snapshot(forJSONL path: String) -> SourceSnapshot? {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let mtime = attrs[.modificationDate] as? Date else { return nil }
+        let projectDir = (path as NSString).deletingLastPathComponent.split(separator: "/").last.map(String.init) ?? ""
+        return snapshot(jsonlPath: path, mtime: mtime, projectDir: projectDir)
+    }
+
     private static func snapshot(jsonlPath: String,
                                  mtime: Date,
                                  projectDir: String) -> SourceSnapshot? {
-        // ID derives from the project dir name (already cwd-encoded by Claude).
-        var snap = SourceSnapshot(id: "claude:\(projectDir)",
+        // ID is the absolute JSONL path so each tab is uniquely addressable
+        // even when multiple tabs share the same project directory.
+        var snap = SourceSnapshot(id: "claude:\(jsonlPath)",
                                   tool: "Claude",
                                   badge: "CLD")
+        _ = projectDir   // kept in case future code wants it
         snap.updatedAt = mtime
 
         guard let tail = tailOfFile(path: jsonlPath, maxBytes: 128 * 1024) else {

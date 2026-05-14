@@ -94,29 +94,30 @@ final class SessionModel: ObservableObject {
     }
 
     func refresh() {
-        let cutoff = Date().addingTimeInterval(-activeWindow)
         var all: [SourceSnapshot] = []
-        all.append(contentsOf: ClaudeSource.readAll(since: cutoff))
-        all.append(contentsOf: CodexSource.readAll(since: cutoff))
-        all.append(contentsOf: CursorSource.readAll(since: cutoff))
 
-        // Only keep sessions whose underlying tool process is actually open
-        // right now. Cursor doesn't fork per workspace, so we use a tight
-        // recency window on state.vscdb as the proxy for "this workspace is
-        // currently open in Cursor".
-        let openIDs = LiveAgents.openSnapshotIDs()
-        let cursorAlive = LiveAgents.cursorRunning
-        let cursorRecent = Date().addingTimeInterval(-30 * 60)
-        all = all.filter { snap in
-            if snap.tool == "Cursor" {
-                guard cursorAlive, let t = snap.updatedAt else { return false }
-                return t >= cursorRecent
+        // One snapshot per live tab — Claude and Codex are driven directly
+        // off LiveAgents.liveSessions(), which maps each live PID to its
+        // own JSONL file (per-tab uniqueness).
+        for session in LiveAgents.liveSessions() {
+            let snap: SourceSnapshot?
+            switch session.tool {
+            case "Claude": snap = ClaudeSource.snapshot(forJSONL: session.jsonlPath)
+            case "Codex":  snap = CodexSource.snapshot(forJSONL: session.jsonlPath)
+            default:       snap = nil
             }
-            return openIDs.contains(snap.id)
+            if let s = snap { all.append(s) }
         }
 
-        // A live tool process is by definition not stale; demote any
-        // "stale" we inherited from the source reader's mtime heuristic.
+        // Cursor has no per-workspace process, so we surface every workspace
+        // whose state.vscdb was touched in the last 30 min and Cursor.app
+        // is running.
+        if LiveAgents.cursorRunning {
+            let cursorCutoff = Date().addingTimeInterval(-30 * 60)
+            all.append(contentsOf: CursorSource.readAll(since: cursorCutoff))
+        }
+
+        // A live tool process is by definition not stale.
         all = all.map { snap in
             var s = snap
             if s.state == .stale { s.state = .idle }
