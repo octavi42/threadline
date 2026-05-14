@@ -3,6 +3,10 @@ import Darwin
 
 enum IPC {
     static let socketPath: String = {
+        if let override = ProcessInfo.processInfo.environment["THREADLINE_OVERLAY_SOCKET"],
+           !override.isEmpty {
+            return override
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/.threadline/overlay.sock"
     }()

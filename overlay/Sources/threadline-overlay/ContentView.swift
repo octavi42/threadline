@@ -8,6 +8,22 @@ enum DetailTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private func badgeColor(_ tool: String) -> Color {
+    switch tool {
+    case "Claude": return Color(red: 1.0, green: 0.55, blue: 0.10)
+    case "Codex":  return Color(red: 0.30, green: 0.85, blue: 0.45)
+    case "Cursor": return Color(red: 0.70, green: 0.50, blue: 1.0)
+    default:       return .gray
+    }
+}
+
+private func sectionTitle(_ text: String) -> some View {
+    Text(text)
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .tracking(0.5)
+        .foregroundColor(.secondary)
+}
+
 struct ContentView: View {
     @ObservedObject var model: SessionModel
     @State private var tab: DetailTab = .overview
@@ -30,6 +46,7 @@ struct ContentView: View {
 
 private struct AgentsList: View {
     @ObservedObject var model: SessionModel
+    @State private var expandedFolderIDs: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,7 +55,7 @@ private struct AgentsList: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("\(model.snapshots.count)")
+                Text("\(model.folders.count)/\(model.snapshots.count)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -58,14 +75,88 @@ private struct AgentsList: View {
                 List(selection: Binding(
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
-                        ForEach(model.snapshots) { snap in
-                            AgentRow(snap: snap, summary: model.summaries[snap.id])
-                                .tag(snap.id)
+                        ForEach(model.folders) { folder in
+                            DisclosureGroup(
+                                isExpanded: Binding(
+                                    get: { expandedFolderIDs.contains(folder.id) },
+                                    set: { isExpanded in
+                                        if isExpanded {
+                                            expandedFolderIDs.insert(folder.id)
+                                        } else {
+                                            expandedFolderIDs.remove(folder.id)
+                                        }
+                                    }
+                                )
+                            ) {
+                                ForEach(folder.snapshots) { snap in
+                                    AgentRow(snap: snap, summary: model.summaries[snap.id])
+                                        .tag(snap.id)
+                                }
+                            }
+                            label: {
+                                FolderHeader(folder: folder)
+                                    .padding(.leading, 4)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        model.selectedID = folder.selectionID
+                                    }
+                            }
+                            .tag(folder.selectionID)
                         }
                 }
                 .listStyle(.sidebar)
+                .onAppear {
+                    if expandedFolderIDs.isEmpty {
+                        expandedFolderIDs = Set(model.folders.map(\.id))
+                    }
+                }
+                .onChange(of: model.folders) { folders in
+                    let visible = Set(folders.map(\.id))
+                    expandedFolderIDs = expandedFolderIDs.intersection(visible)
+                    if expandedFolderIDs.isEmpty {
+                        expandedFolderIDs = visible
+                    }
+                }
             }
         }
+    }
+}
+
+private struct FolderHeader: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(folder.name)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(folder.snapshots.count)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            Text(folder.displayCwd)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct FolderStateDots: View {
+    let snapshots: [SourceSnapshot]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(snapshots.prefix(3).enumerated()), id: \.offset) { _, snap in
+                StateDot(state: snap.state)
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .frame(width: 22, alignment: .leading)
     }
 }
 
@@ -103,14 +194,6 @@ private struct AgentRow: View {
             return s
         }
         return snap.activityLine
-    }
-    private func badgeColor(_ tool: String) -> Color {
-        switch tool {
-        case "Claude": return Color(red: 1.0, green: 0.55, blue: 0.10)
-        case "Codex":  return Color(red: 0.30, green: 0.85, blue: 0.45)
-        case "Cursor": return Color(red: 0.70, green: 0.50, blue: 1.0)
-        default:       return .gray
-        }
     }
 }
 
@@ -151,6 +234,8 @@ private struct DetailsPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+        } else if let folder = model.selectedFolder {
+            FolderDetailsPane(model: model, folder: folder)
         } else {
             VStack {
                 Spacer()
@@ -161,6 +246,203 @@ private struct DetailsPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+private struct FolderDetailsPane: View {
+    @ObservedObject var model: SessionModel
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FolderDetailHeader(folder: folder)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    FolderStatsView(folder: folder)
+                    FolderSubagentsView(model: model, folder: folder)
+                    FolderTasksView(folder: folder)
+                    FolderFilesView(folder: folder)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+private struct FolderDetailHeader: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                FolderStateDots(snapshots: folder.snapshots)
+                Text(folder.name)
+                    .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                Spacer()
+                if let latest = folder.latestSnapshot {
+                    Text(latest.timeAgoShort)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(folder.displayCwd)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(Color.secondary.opacity(0.7))
+        }
+    }
+}
+
+private struct FolderStatsView: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        let running = folder.snapshots.filter { $0.state == .running }.count
+        let awaiting = folder.snapshots.filter { $0.state == .awaiting }.count
+        let tasks = folder.snapshots.flatMap(\.tasks)
+        let files = uniqueFiles
+        let tools = Dictionary(grouping: folder.snapshots, by: \.tool)
+            .map { "\($0.key) \($0.value.count)" }
+            .sorted()
+            .joined(separator: " · ")
+        let items: [(String, String?)] = [
+            ("subagents", "\(folder.snapshots.count)"),
+            ("running", running > 0 ? "\(running)" : nil),
+            ("awaiting", awaiting > 0 ? "\(awaiting)" : nil),
+            ("tools", tools.isEmpty ? nil : tools),
+            ("tasks", tasks.isEmpty ? nil : "\(tasks.filter { $0.status == "completed" }.count)/\(tasks.count) done"),
+            ("files edited", files.isEmpty ? nil : "\(files.count)"),
+        ]
+
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3),
+                 alignment: .leading, spacing: 14) {
+            ForEach(items.compactMap { item -> (String, String)? in
+                guard let value = item.1, !value.isEmpty else { return nil }
+                return (item.0, value)
+            }, id: \.0) { label, value in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label.uppercased())
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundColor(.secondary)
+                    Text(value)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.primary)
+                }
+            }
+        }
+    }
+
+    private var uniqueFiles: [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for path in folder.snapshots.flatMap(\.filesEdited) where !seen.contains(path) {
+            seen.insert(path)
+            out.append(path)
+        }
+        return out
+    }
+}
+
+private struct FolderSubagentsView: View {
+    @ObservedObject var model: SessionModel
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("SUBAGENTS")
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(folder.snapshots) { snap in
+                    Button {
+                        model.selectedID = snap.id
+                    } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            StateDot(state: snap.state)
+                                .frame(width: 7, height: 7)
+                                .padding(.top, 4)
+                            BadgeView(label: snap.badge, color: badgeColor(snap.tool))
+                                .padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(snap.tool)
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text(snap.metricsLine)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text(snap.timeAgoShort)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                                Text(summary(for: snap))
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func summary(for snap: SourceSnapshot) -> String {
+        if let s = model.summaries[snap.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !s.isEmpty {
+            return s
+        }
+        return snap.activityLine
+    }
+}
+
+private struct FolderTasksView: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        let tasks = folder.snapshots.flatMap(\.tasks)
+        if !tasks.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("TASKS")
+                ForEach(Array(tasks.prefix(8).enumerated()), id: \.offset) { _, task in
+                    TaskRow(task: task)
+                }
+            }
+        }
+    }
+}
+
+private struct FolderFilesView: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        if !uniqueFiles.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                sectionTitle("FILES EDITED (\(uniqueFiles.count))")
+                ForEach(uniqueFiles.prefix(12), id: \.self) { path in
+                    Text((path as NSString).abbreviatingWithTildeInPath)
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private var uniqueFiles: [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for path in folder.snapshots.flatMap(\.filesEdited) where !seen.contains(path) {
+            seen.insert(path)
+            out.append(path)
+        }
+        return out
     }
 }
 
