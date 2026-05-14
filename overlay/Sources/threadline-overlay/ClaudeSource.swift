@@ -181,10 +181,11 @@ enum ClaudeSource {
         else if ageSec > 300                   { snap.state = .stale }
         else                                   { snap.state = .idle }
 
-        // The tail can lose TaskCreate records in long sessions (they may
-        // sit further back than the 128 KB window). Do a full-file scan for
-        // task records to reconstruct the canonical list; cached by mtime.
-        let finalTasks = scanAllTasks(jsonlPath: jsonlPath, mtime: mtime)
+        // Whole-file aggregates (tasks + per-tool token attribution).
+        // Cached by mtime so we only pay the full scan once per change.
+        let aggregates = scanFullSession(jsonlPath: jsonlPath, mtime: mtime)
+        snap.toolTokenEstimate = aggregates.toolTokens
+        let finalTasks = aggregates.tasks
             .ifEmpty(else: {
                 // Fall back to whatever we found in the tail.
                 var t: [TaskItem] = []
@@ -252,41 +253,56 @@ enum ClaudeSource {
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
-    // MARK: - full-file task scan (with mtime cache)
+    // MARK: - full-file scan (with mtime cache)
 
-    private struct TaskCacheEntry {
-        let mtime: Date
+    struct FullSessionAggregates {
         let tasks: [TaskItem]
+        /// Estimated tokens per tool, summed across input + result bytes.
+        let toolTokens: [String: Int]
     }
-    private static var taskCache: [String: TaskCacheEntry] = [:]
-    private static let taskCacheLock = NSLock()
+    private struct FullSessionCacheEntry {
+        let mtime: Date
+        let aggregates: FullSessionAggregates
+    }
+    private static var sessionCache: [String: FullSessionCacheEntry] = [:]
+    private static let sessionCacheLock = NSLock()
 
-    /// Scan the entire JSONL for TaskCreate / TaskUpdate / TodoWrite records
-    /// and reconstruct the current task list. Cached by (path, mtime) so
-    /// consecutive refreshes that hit an unchanged file are free.
-    private static func scanAllTasks(jsonlPath: String, mtime: Date) -> [TaskItem] {
-        taskCacheLock.lock()
-        if let hit = taskCache[jsonlPath], hit.mtime == mtime {
-            taskCacheLock.unlock()
-            return hit.tasks
+    /// One full sweep through the JSONL that produces every whole-file
+    /// aggregation the snapshot needs. Cached by (path, mtime) so
+    /// consecutive refreshes against an unchanged file are free.
+    ///
+    /// Why one combined pass: the previous design had `scanAllTasks` widen
+    /// its fast-filter and walk the file once per metric. Adding per-tool
+    /// token attribution would have needed a second full scan. Folding both
+    /// into one pass keeps a single mtime cache and one file read.
+    private static func scanFullSession(jsonlPath: String, mtime: Date) -> FullSessionAggregates {
+        sessionCacheLock.lock()
+        if let hit = sessionCache[jsonlPath], hit.mtime == mtime {
+            sessionCacheLock.unlock()
+            return hit.aggregates
         }
-        taskCacheLock.unlock()
+        sessionCacheLock.unlock()
 
+        let empty = FullSessionAggregates(tasks: [], toolTokens: [:])
         guard let text = try? String(contentsOfFile: jsonlPath, encoding: .utf8) else {
-            return []
+            return empty
         }
+
         struct WIP { var content: String; var status: String }
         var byID: [String: WIP] = [:]
         var order: [String] = []
         var pending: [String: String] = [:]
         var todoWriteFallback: [[String: Any]] = []
+        var toolByUseID: [String: String] = [:]
+        var inputBytes: [String: Int] = [:]
+        var resultBytes: [String: Int] = [:]
 
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            // Fast filter: only parse JSON if the line might be relevant.
             let s = String(raw)
-            let interesting = s.contains("\"TaskCreate\"")
-                           || s.contains("\"TaskUpdate\"")
-                           || s.contains("\"TodoWrite\"")
+            // Fast filter — accept any line that might contribute. tool_use
+            // lines feed token attribution; tool_result and the three task
+            // tools feed task reconstruction.
+            let interesting = s.contains("\"tool_use\"")
                            || s.contains("\"tool_result\"")
             guard interesting else { continue }
             guard let data = s.data(using: .utf8),
@@ -298,9 +314,17 @@ enum ClaudeSource {
             for block in content {
                 let type = block["type"] as? String
                 if type == "tool_use" {
-                    let name = block["name"] as? String
+                    let name = block["name"] as? String ?? ""
                     let input = block["input"] as? [String: Any] ?? [:]
                     let useID = block["id"] as? String
+
+                    // Token attribution: count bytes of the encoded input.
+                    if let useID = useID { toolByUseID[useID] = name }
+                    if let bytes = try? JSONSerialization.data(withJSONObject: input, options: []) {
+                        inputBytes[name, default: 0] += bytes.count
+                    }
+
+                    // Task tracking.
                     switch name {
                     case "TodoWrite":
                         if let todos = input["todos"] as? [[String: Any]] {
@@ -319,37 +343,54 @@ enum ClaudeSource {
                     default: break
                     }
                 } else if type == "tool_result",
-                          let useID = block["tool_use_id"] as? String,
-                          let subject = pending[useID] {
-                    pending.removeValue(forKey: useID)
+                          let useID = block["tool_use_id"] as? String {
                     let body = extractToolResultText(block["content"]) ?? ""
-                    if let id = parseTaskID(from: body) {
-                        byID[id] = WIP(content: subject, status: "pending")
-                        order.append(id)
+
+                    // Token attribution: charge the result bytes to whichever
+                    // tool emitted them.
+                    if let toolName = toolByUseID[useID] {
+                        resultBytes[toolName, default: 0] += body.utf8.count
+                    }
+
+                    // Task reconstruction.
+                    if let subject = pending[useID] {
+                        pending.removeValue(forKey: useID)
+                        if let id = parseTaskID(from: body) {
+                            byID[id] = WIP(content: subject, status: "pending")
+                            order.append(id)
+                        }
                     }
                 }
             }
         }
 
-        var out: [TaskItem] = []
+        var tasks: [TaskItem] = []
         if !order.isEmpty {
             for id in order {
                 if let wip = byID[id], wip.status != "deleted" {
-                    out.append(TaskItem(content: wip.content, status: wip.status))
+                    tasks.append(TaskItem(content: wip.content, status: wip.status))
                 }
             }
         } else {
-            out = todoWriteFallback.compactMap { dict in
+            tasks = todoWriteFallback.compactMap { dict in
                 guard let c = dict["content"] as? String,
                       let s = dict["status"] as? String else { return nil }
                 return TaskItem(content: c, status: s)
             }
         }
 
-        taskCacheLock.lock()
-        taskCache[jsonlPath] = TaskCacheEntry(mtime: mtime, tasks: out)
-        taskCacheLock.unlock()
-        return out
+        // ~4 bytes per token is the common heuristic for mixed English/code.
+        var toolTokens: [String: Int] = [:]
+        for name in Set(inputBytes.keys).union(resultBytes.keys) {
+            let bytes = (inputBytes[name] ?? 0) + (resultBytes[name] ?? 0)
+            if bytes > 0 { toolTokens[name] = bytes / 4 }
+        }
+
+        let aggregates = FullSessionAggregates(tasks: tasks, toolTokens: toolTokens)
+        sessionCacheLock.lock()
+        sessionCache[jsonlPath] = FullSessionCacheEntry(mtime: mtime, aggregates: aggregates)
+        sessionCacheLock.unlock()
+        return aggregates
     }
 
     /// Pull the assigned task ID out of "Task #N created successfully: ..."

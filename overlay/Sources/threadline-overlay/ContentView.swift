@@ -349,6 +349,17 @@ private struct FilesView: View {
                         .map { "\($0.key) · \($0.value)" })
                 }
             }
+            if !snap.toolTokenEstimate.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("TOKENS PER TOOL")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundColor(.secondary)
+                    FlowChips(items: snap.toolTokenEstimate
+                        .sorted { $0.value > $1.value }
+                        .map { "\($0.key) · \(SourceSnapshot.formatTokens($0.value)) tk" })
+                }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Text("FILES EDITED (\(snap.filesEdited.count))")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))

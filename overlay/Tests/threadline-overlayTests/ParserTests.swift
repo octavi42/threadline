@@ -36,6 +36,18 @@ final class ClaudeSourceTests: XCTestCase {
 
         // Last assistant text fallback (no in-progress task, no active tool target).
         XCTAssertEqual(snap.lastText, "Done with the auth read; starting on middleware.")
+
+        // Per-tool token attribution exists for every tool that appeared in
+        // the fixture (TaskCreate, TaskUpdate, Edit) and Edit's value is
+        // non-zero because its tool_use input has a file_path.
+        XCTAssertGreaterThan(snap.toolTokenEstimate["Edit"] ?? 0, 0)
+        XCTAssertGreaterThan(snap.toolTokenEstimate["TaskCreate"] ?? 0, 0)
+
+        // Formatter sanity checks (single source of truth in SourceSnapshot).
+        XCTAssertEqual(SourceSnapshot.formatTokens(412),       "412")
+        XCTAssertEqual(SourceSnapshot.formatTokens(4_234),     "4.2K")
+        XCTAssertEqual(SourceSnapshot.formatTokens(120_000),   "120K")
+        XCTAssertEqual(SourceSnapshot.formatTokens(1_200_000), "1.2M")
     }
 }
 

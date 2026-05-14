@@ -38,6 +38,8 @@ struct SourceSnapshot: Identifiable, Equatable {
     var tasks: [TaskItem] = []
     var filesEdited: [String] = []        // distinct, in order seen
     var toolCallCounts: [String: Int] = [:]
+    /// Estimated tokens consumed per tool (sum of input + result bytes / 4).
+    var toolTokenEstimate: [String: Int] = [:]
     var userTurns: Int = 0
     var assistantTurns: Int = 0
     var sessionStart: Date?               // first record's timestamp
@@ -74,6 +76,14 @@ struct SourceSnapshot: Identifiable, Equatable {
         if let p = contextPercent  { parts.append(String(format: "%.0f%% ctx", p * 100)) }
         if let c = costUSD, c > 0  { parts.append(String(format: "$%.2f", c)) }
         return parts.joined(separator: " · ")
+    }
+
+    /// Short token-count label: "412", "4.2K", "120K", "1.2M".
+    static func formatTokens(_ n: Int) -> String {
+        if n < 1_000        { return "\(n)" }
+        if n < 10_000       { return String(format: "%.1fK", Double(n) / 1_000) }
+        if n < 1_000_000    { return "\(n / 1_000)K" }
+        return String(format: "%.1fM", Double(n) / 1_000_000)
     }
 
     var timeAgoShort: String {
