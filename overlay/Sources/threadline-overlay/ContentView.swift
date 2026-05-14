@@ -125,25 +125,21 @@ private struct FolderHeader: View {
     let folder: SessionFolder
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            FolderStateDots(snapshots: folder.snapshots)
-                .padding(.top, 3)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(folder.name)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text("\(folder.snapshots.count)")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-                Text(folder.displayCwd)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(folder.name)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Text("\(folder.snapshots.count)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
+            Text(folder.displayCwd)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
         .padding(.vertical, 4)
     }
