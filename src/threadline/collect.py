@@ -50,9 +50,13 @@ def run(command: list[str], cwd: str | None = None) -> CommandResult:
 def collect_context(pane_lines: int = 3000) -> Context:
     cwd = os.getcwd()
     warnings: list[str] = []
-    tmux_pane = os.environ.get("TMUX_PANE")
+    tmux_pane = os.environ.get("THREADLINE_TARGET_PANE") or os.environ.get("TMUX_PANE")
 
-    pane = run(["tmux", "capture-pane", "-pS", f"-{pane_lines}"])
+    pane_command = ["tmux", "capture-pane", "-p", "-S", f"-{pane_lines}"]
+    if tmux_pane:
+        pane_command.extend(["-t", tmux_pane])
+
+    pane = run(pane_command)
     pane_text = pane.output if pane.ok else ""
     if not pane.ok:
         warnings.append("tmux pane capture unavailable; run inside tmux for best results")
@@ -80,4 +84,3 @@ def collect_context(pane_lines: int = 3000) -> Context:
         git_diff_stat=git_diff_stat,
         warnings=warnings,
     )
-

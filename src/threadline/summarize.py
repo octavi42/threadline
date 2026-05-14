@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from .collect import Context
 
@@ -68,3 +69,30 @@ def render_summary(context: Context) -> str:
 
     return "\n".join(lines)
 
+
+def render_compact_summary(context: Context, width: int = 100) -> str:
+    files = changed_files(context.git_status, limit=4)
+    tail = meaningful_tail(context.pane_text, limit=4)
+    branch = context.git_branch or "none"
+    cwd = Path(context.cwd).name or context.cwd
+    changed = ", ".join(files) if files else "clean"
+    activity = tail[-1] if tail else "no pane activity captured"
+    action = next_action(context, files)
+    generated = datetime.now().strftime("%H:%M:%S")
+    width = max(48, width)
+
+    def clip(value: str) -> str:
+        if len(value) <= width:
+            return value
+        return value[: width - 3] + "..."
+
+    rule = "-" * min(width, 120)
+    return "\n".join(
+        [
+            rule,
+            clip(f"Threadline | {cwd} | branch {branch} | updated {generated}"),
+            clip(f"Now        | {activity}"),
+            clip(f"Next       | {action}"),
+            clip(f"Files      | {changed}"),
+        ]
+    )
