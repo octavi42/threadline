@@ -143,6 +143,7 @@ struct SessionFolder: Identifiable, Equatable {
     var snapshots: [SourceSnapshot]
 
     var id: String { cwd }
+    var selectionID: String { "folder:\(cwd)" }
 
     var name: String {
         (cwd as NSString).lastPathComponent
@@ -222,7 +223,7 @@ final class SessionModel: ObservableObject {
             guard let self = self else { return }
             self.snapshots = all
             self.folders = folders
-            if self.selectedID == nil || !all.contains(where: { $0.id == self.selectedID }) {
+            if self.selectedID == nil || self.selectedSnapshot == nil && self.selectedFolder == nil {
                 self.selectedID = firstID
             }
             // Eagerly summarise the top N. The summarizer's (path, mtime)
@@ -293,6 +294,11 @@ final class SessionModel: ObservableObject {
     var selectedSnapshot: SourceSnapshot? {
         guard let id = selectedID else { return nil }
         return snapshots.first { $0.id == id }
+    }
+
+    var selectedFolder: SessionFolder? {
+        guard let id = selectedID else { return nil }
+        return folders.first { $0.selectionID == id }
     }
 
     /// Request a summary for the currently-selected snapshot. Shares the
