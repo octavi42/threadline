@@ -432,6 +432,11 @@ def main() -> int:
         "--shell",
         help="Shell command to run. Defaults to $SHELL.",
     )
+    session_parser.add_argument(
+        "--no-panel",
+        action="store_true",
+        help="Record the session without reserving a fixed top panel.",
+    )
 
     subparsers.add_parser("summarize", help="Generate a fresh session summary.")
 
@@ -517,7 +522,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "session":
-        return run_session(shell=args.shell)
+        return run_session(shell=args.shell, panel=not args.no_panel)
     if args.command == "summarize":
         return summarize_command()
     if args.command == "show":

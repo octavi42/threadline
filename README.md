@@ -8,7 +8,7 @@ The primary workflow is tmux-free:
 threadline session
 ```
 
-This starts your normal shell inside a PTY and records the terminal stream to:
+This starts your normal shell inside a PTY, reserves a fixed Threadline panel at the top of the terminal, and records the terminal stream to:
 
 ```text
 ~/.local/state/threadline/sessions/
@@ -43,7 +43,8 @@ python -m pip install -e .
 ## Commands
 
 ```bash
-threadline session          # start a tracked shell
+threadline session          # start a tracked shell with a fixed top panel
+threadline session --no-panel
 threadline show             # show current summary, wait for a key
 threadline summarize        # refresh summary cache
 threadline watch            # redraw summary periodically
@@ -55,4 +56,3 @@ threadline reset            # clean legacy tmux Threadline panes/options
 ## Notes
 
 Threadline still has legacy tmux commands from the prototype, but tmux is no longer required for session capture.
-
