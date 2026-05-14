@@ -101,13 +101,26 @@ final class SessionModel: ObservableObject {
         all.append(contentsOf: CursorSource.readAll(since: cutoff))
 
         // Only keep sessions whose underlying tool process is actually open
-        // right now. Cursor doesn't fork per workspace, so we gate on the
-        // Cursor app being alive instead of per-cwd matching.
+        // right now. Cursor doesn't fork per workspace, so we use a tight
+        // recency window on state.vscdb as the proxy for "this workspace is
+        // currently open in Cursor".
         let openIDs = LiveAgents.openSnapshotIDs()
         let cursorAlive = LiveAgents.cursorRunning
+        let cursorRecent = Date().addingTimeInterval(-30 * 60)
         all = all.filter { snap in
-            if snap.tool == "Cursor" { return cursorAlive }
+            if snap.tool == "Cursor" {
+                guard cursorAlive, let t = snap.updatedAt else { return false }
+                return t >= cursorRecent
+            }
             return openIDs.contains(snap.id)
+        }
+
+        // A live tool process is by definition not stale; demote any
+        // "stale" we inherited from the source reader's mtime heuristic.
+        all = all.map { snap in
+            var s = snap
+            if s.state == .stale { s.state = .idle }
+            return s
         }
 
         // Most recently active first; running > others within the same time bucket.
