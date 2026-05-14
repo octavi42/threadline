@@ -12,6 +12,7 @@ from .collect import collect_context
 from .summarize import render_compact_summary, render_summary
 
 TOP_PANE_OPTION = "@threadline_top_pane"
+TOP_TARGET_OPTION = "@threadline_top_target_pane"
 STATUS_ACTIVE_OPTION = "@threadline_status_active"
 STATUS_TARGET_OPTION = "@threadline_target_pane"
 STATUS_PREV_OPTIONS = {
@@ -228,6 +229,8 @@ def open_top_pane(height: int, interval: int) -> int:
 
     top_pane = completed.stdout.strip()
     run_tmux(["set-option", "-gq", TOP_PANE_OPTION, top_pane])
+    run_tmux(["set-option", "-gq", TOP_TARGET_OPTION, target_pane])
+    run_tmux(["select-pane", "-t", target_pane])
     print(f"Threadline top pane opened for {target_pane}.")
     return 0
 
@@ -235,12 +238,17 @@ def open_top_pane(height: int, interval: int) -> int:
 def close_top_pane() -> bool:
     completed = run_tmux(["show-option", "-gqv", TOP_PANE_OPTION])
     top_pane = completed.stdout.strip()
+    target = tmux_option(TOP_TARGET_OPTION)
     if not tmux_pane_exists(top_pane):
         run_tmux(["set-option", "-guq", TOP_PANE_OPTION])
+        run_tmux(["set-option", "-guq", TOP_TARGET_OPTION])
         return False
 
     run_tmux(["kill-pane", "-t", top_pane])
     run_tmux(["set-option", "-guq", TOP_PANE_OPTION])
+    run_tmux(["set-option", "-guq", TOP_TARGET_OPTION])
+    if tmux_pane_exists(target):
+        run_tmux(["select-pane", "-t", target])
     return True
 
 
@@ -368,6 +376,7 @@ def reset_command() -> int:
 
     for option in [
         TOP_PANE_OPTION,
+        TOP_TARGET_OPTION,
         STATUS_ACTIVE_OPTION,
         STATUS_TARGET_OPTION,
         BORDER_ACTIVE_OPTION,
@@ -396,18 +405,18 @@ def reset_command() -> int:
 
 
 def top_command(height: int, interval: int) -> int:
-    del height
-    del interval
+    close_status_top()
     close_border_top()
-    return open_border_top()
+    close_top_pane()
+    return open_top_pane(height=height, interval=interval)
 
 
 def toggle_command(height: int, interval: int) -> int:
-    del height
-    del interval
-    if close_border_top():
+    if close_top_pane():
         return 0
-    return open_border_top()
+    close_status_top()
+    close_border_top()
+    return open_top_pane(height=height, interval=interval)
 
 
 def main() -> int:
@@ -473,7 +482,7 @@ def main() -> int:
         "--height",
         type=int,
         default=5,
-        help="Ignored; kept for compatibility.",
+        help="Height of the fixed top pane.",
     )
     top_parser.add_argument(
         "--interval",
@@ -487,7 +496,7 @@ def main() -> int:
         "--height",
         type=int,
         default=5,
-        help="Ignored; kept for compatibility.",
+        help="Height of the fixed top pane.",
     )
     toggle_parser.add_argument(
         "--interval",
