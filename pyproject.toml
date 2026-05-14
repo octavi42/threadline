@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threadline"
+version = "0.1.0"
+description = "A terminal companion that summarizes the current work thread."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+threadline = "threadline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
