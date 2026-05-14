@@ -16,10 +16,33 @@ Planned flow:
 tmux pane/git context -> LLM summary -> local cache -> tmux popup
 ```
 
+## Try It
+
+Prerequisites for the popup workflow:
+
+```bash
+brew install tmux
+```
+
+From the project directory:
+
+```bash
+python -m pip install -e .
+threadline summarize
+threadline show --no-wait
+```
+
+From inside tmux:
+
+```bash
+threadline show
+```
+
+`show` waits for one key before closing when it is attached to a real terminal. Use `--no-wait` for scripts.
+
 Example tmux bindings:
 
 ```tmux
 bind-key t display-popup -E -w 70% -h 40% 'threadline show'
 bind-key T display-popup -E -w 70% -h 40% 'threadline summarize && threadline show'
 ```
-
