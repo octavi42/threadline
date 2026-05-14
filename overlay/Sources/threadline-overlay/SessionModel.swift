@@ -11,6 +11,12 @@ enum SourceState: String, Equatable {
     case none       // no session found
 }
 
+struct TaskItem: Equatable, Identifiable {
+    var id: String { content }
+    let content: String
+    let status: String   // "in_progress" | "completed" | "pending"
+}
+
 struct SourceSnapshot: Identifiable, Equatable {
     let id: String              // "claude:/Users/foo/proj" — unique per session
     let tool: String            // "Claude" | "Codex" | "Cursor"
@@ -27,6 +33,16 @@ struct SourceSnapshot: Identifiable, Equatable {
     var costUSD: Double?
     var updatedAt: Date?
     var note: String?
+
+    // Phase 2 fields — populated when available; nil otherwise.
+    var tasks: [TaskItem] = []
+    var filesEdited: [String] = []        // distinct, in order seen
+    var toolCallCounts: [String: Int] = [:]
+    var userTurns: Int = 0
+    var assistantTurns: Int = 0
+    var sessionStart: Date?               // first record's timestamp
+    /// The session's underlying JSONL path. Used by the summarizer.
+    var jsonlPath: String?
 
     var projectName: String {
         guard let cwd = cwd, !cwd.isEmpty else { return "—" }
@@ -70,6 +86,36 @@ struct SourceSnapshot: Identifiable, Equatable {
         return "\(s / 86_400)d"
     }
 
+    /// $/min averaged over the session. nil if duration < 30s or cost is nil.
+    var costBurnPerMin: Double? {
+        guard let cost = costUSD, let start = sessionStart else { return nil }
+        let mins = -start.timeIntervalSinceNow / 60.0
+        if mins < 0.5 { return nil }
+        return cost / mins
+    }
+
+    /// Time remaining in the current 5-hour Claude billing block (only
+    /// meaningful for Claude). nil if no session start known.
+    var blockRemaining: TimeInterval? {
+        guard tool == "Claude", let start = sessionStart else { return nil }
+        let blockEnd = start.addingTimeInterval(5 * 3600)
+        let remaining = blockEnd.timeIntervalSinceNow
+        return remaining > 0 ? remaining : 0
+    }
+
+    /// Formatted "Hh Mm" for the block-remaining timer.
+    var blockRemainingFormatted: String? {
+        guard let r = blockRemaining else { return nil }
+        let h = Int(r) / 3600
+        let m = (Int(r) % 3600) / 60
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
+    }
+
+    var tasksDone:       Int { tasks.filter { $0.status == "completed"   }.count }
+    var tasksInProgress: Int { tasks.filter { $0.status == "in_progress" }.count }
+    var tasksPending:    Int { tasks.filter { $0.status == "pending"     }.count }
+
     private func shortModel(_ m: String) -> String {
         let lower = m.lowercased()
         if let r = lower.range(of: "claude-") { return String(lower[r.upperBound...]) }
@@ -81,6 +127,9 @@ struct SourceSnapshot: Identifiable, Equatable {
 final class SessionModel: ObservableObject {
     @Published var snapshots: [SourceSnapshot] = []
     @Published var selectedID: String?
+    /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
+    /// Lands asynchronously when the Summarizer completes a fetch.
+    @Published var summaries: [String: String] = [:]
     private var timer: Timer?
 
     /// Treat anything modified within this window as "active enough to surface".
@@ -156,5 +205,23 @@ final class SessionModel: ObservableObject {
     var selectedSnapshot: SourceSnapshot? {
         guard let id = selectedID else { return nil }
         return snapshots.first { $0.id == id }
+    }
+
+    /// Request a summary for the currently-selected snapshot.
+    /// Idempotent — cache hits return immediately; async fetches surface via
+    /// the @Published `summaries` dict.
+    func requestSummaryForSelection() {
+        guard let snap = selectedSnapshot,
+              let path = snap.jsonlPath,
+              let mtime = snap.updatedAt
+        else { return }
+        let id = snap.id
+        if let cached = Summarizer.shared.summary(forJSONL: path,
+                                                  mtime: mtime,
+                                                  onUpdate: { [weak self] text in
+            self?.summaries[id] = text
+        }) {
+            summaries[id] = cached
+        }
     }
 }

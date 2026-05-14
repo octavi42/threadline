@@ -64,6 +64,12 @@ enum ClaudeSource {
         var lastTodos: [[String: Any]] = []
         var lastRecordRole: String?
         var totals = TokenTotals()
+        var toolCounts: [String: Int] = [:]
+        var filesEditedOrder: [String] = []
+        var filesEditedSeen: Set<String> = []
+        var userTurns = 0
+        var assistantTurns = 0
+        var earliestTs: Date?
 
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -75,6 +81,18 @@ enum ClaudeSource {
             if let m = msg["model"] as? String { model = m }
 
             if type == "assistant" || type == "user" { lastRecordRole = type }
+            if type == "user"      { userTurns += 1 }
+            if type == "assistant" { assistantTurns += 1 }
+
+            // Track the earliest timestamp we see in the tail as a rough
+            // proxy for session start. (For a more accurate start time the
+            // ClaudeSource caller should use the JSONL's birth time.)
+            if let tsStr = obj["timestamp"] as? String,
+               let ts = parseISO8601(tsStr),
+               earliestTs == nil || ts < earliestTs! {
+                earliestTs = ts
+            }
+
             if let usage = msg["usage"] as? [String: Any] { totals.add(usage) }
 
             if let content = msg["content"] as? [[String: Any]] {
@@ -92,10 +110,17 @@ enum ClaudeSource {
                         if let name = block["name"] as? String {
                             lastToolUseName = name
                             lastToolUseInput = block["input"] as? [String: Any]
+                            toolCounts[name, default: 0] += 1
                             if name == "TodoWrite",
                                let input = block["input"] as? [String: Any],
                                let todos = input["todos"] as? [[String: Any]] {
                                 lastTodos = todos
+                            }
+                            if let input = block["input"] as? [String: Any],
+                               let path = input["file_path"] as? String,
+                               !filesEditedSeen.contains(path) {
+                                filesEditedSeen.insert(path)
+                                filesEditedOrder.append(path)
                             }
                         }
                     default: break
@@ -137,7 +162,34 @@ enum ClaudeSource {
             snap.branch = info.branch
             snap.dirtyCount = info.dirty
         }
+
+        // Phase-2 fields.
+        snap.tasks = lastTodos.compactMap { dict in
+            guard let content = dict["content"] as? String,
+                  let status = dict["status"] as? String else { return nil }
+            return TaskItem(content: content, status: status)
+        }
+        snap.filesEdited = filesEditedOrder
+        snap.toolCallCounts = toolCounts
+        snap.userTurns = userTurns
+        snap.assistantTurns = assistantTurns
+        // For session start, prefer JSONL birth time (more reliable than
+        // the earliest record in a tailed window).
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: jsonlPath),
+           let birth = attrs[.creationDate] as? Date {
+            snap.sessionStart = birth
+        } else {
+            snap.sessionStart = earliestTs
+        }
+        snap.jsonlPath = jsonlPath
+
         return snap
+    }
+
+    private static func parseISO8601(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
     private static func describe(tool: String, input: [String: Any]?) -> String {

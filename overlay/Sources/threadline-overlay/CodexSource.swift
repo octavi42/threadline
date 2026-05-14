@@ -82,6 +82,8 @@ enum CodexSource {
         var lastUser: String?
         var lastTokenUsage: (input: Int, cached: Int, output: Int)?
         var sawStartedAfterComplete = false
+        var userTurns = 0
+        var assistantTurns = 0
 
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -115,8 +117,8 @@ enum CodexSource {
                     let content = payload["content"] as? [[String: Any]] ?? []
                     let text = content.compactMap { $0["text"] as? String }.joined(separator: " ")
                     if !text.isEmpty {
-                        if role == "assistant" { lastAssistant = text }
-                        else if role == "user" { lastUser = text }
+                        if role == "assistant" { lastAssistant = text; assistantTurns += 1 }
+                        else if role == "user" { lastUser = text; userTurns += 1 }
                     }
                 }
             default: break
@@ -139,6 +141,13 @@ enum CodexSource {
             snap.branch = info.branch
             snap.dirtyCount = info.dirty
         }
+        snap.userTurns = userTurns
+        snap.assistantTurns = assistantTurns
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let birth = attrs[.creationDate] as? Date {
+            snap.sessionStart = birth
+        }
+        snap.jsonlPath = url.path
         return snap
     }
 }
