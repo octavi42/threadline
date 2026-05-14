@@ -61,7 +61,6 @@ enum ClaudeSource {
         var lastUserText: String?
         var lastToolUseName: String?
         var lastToolUseInput: [String: Any]?
-        var lastTodos: [[String: Any]] = []
         var lastRecordRole: String?
         var totals = TokenTotals()
         var toolCounts: [String: Int] = [:]
@@ -70,6 +69,17 @@ enum ClaudeSource {
         var userTurns = 0
         var assistantTurns = 0
         var earliestTs: Date?
+
+        // Task tracking: Claude Code's task tools emit TaskCreate / TaskUpdate
+        // separately. The task ID is assigned by the system and surfaces in
+        // the tool_result body ("Task #N created successfully: ..."), so we
+        // correlate TaskCreate → tool_result via tool_use_id.
+        // TodoWrite (legacy) writes the entire list in one input dict.
+        struct WIPTask { var content: String; var status: String }
+        var taskByID: [String: WIPTask] = [:]
+        var creationOrder: [String] = []
+        var pendingByToolUseID: [String: String] = [:]   // toolUseID -> subject
+        var todoWriteFallback: [[String: Any]] = []
 
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -111,16 +121,49 @@ enum ClaudeSource {
                             lastToolUseName = name
                             lastToolUseInput = block["input"] as? [String: Any]
                             toolCounts[name, default: 0] += 1
-                            if name == "TodoWrite",
-                               let input = block["input"] as? [String: Any],
-                               let todos = input["todos"] as? [[String: Any]] {
-                                lastTodos = todos
+                            let input = block["input"] as? [String: Any] ?? [:]
+                            let toolUseID = block["id"] as? String
+
+                            switch name {
+                            case "TodoWrite":
+                                if let todos = input["todos"] as? [[String: Any]] {
+                                    todoWriteFallback = todos
+                                }
+                            case "TaskCreate":
+                                if let useID = toolUseID,
+                                   let subject = input["subject"] as? String {
+                                    pendingByToolUseID[useID] = subject
+                                }
+                            case "TaskUpdate":
+                                if let taskID = input["taskId"] as? String,
+                                   var wip = taskByID[taskID] {
+                                    if let newStatus = input["status"] as? String {
+                                        wip.status = newStatus
+                                    }
+                                    if let newSubject = input["subject"] as? String {
+                                        wip.content = newSubject
+                                    }
+                                    taskByID[taskID] = wip
+                                }
+                            default:
+                                break
                             }
-                            if let input = block["input"] as? [String: Any],
-                               let path = input["file_path"] as? String,
+                            if let path = input["file_path"] as? String,
                                !filesEditedSeen.contains(path) {
                                 filesEditedSeen.insert(path)
                                 filesEditedOrder.append(path)
+                            }
+                        }
+                    case "tool_result":
+                        // Pair TaskCreate tool_use with its tool_result so we
+                        // can recover the system-assigned task ID.
+                        if let useID = block["tool_use_id"] as? String,
+                           let subject = pendingByToolUseID[useID] {
+                            pendingByToolUseID.removeValue(forKey: useID)
+                            let bodyText = extractToolResultText(block["content"]) ?? ""
+                            if let id = parseTaskID(from: bodyText) {
+                                taskByID[id] = WIPTask(content: subject, status: "pending")
+                                creationOrder.append(id)
                             }
                         }
                     default: break
@@ -138,9 +181,24 @@ enum ClaudeSource {
         else if ageSec > 300                   { snap.state = .stale }
         else                                   { snap.state = .idle }
 
-        if let active = lastTodos.first(where: { ($0["status"] as? String) == "in_progress" }),
-           let title = active["content"] as? String {
-            snap.currentTask = title
+        // Build the final task list. TaskCreate/TaskUpdate wins; if there
+        // are none, fall back to the legacy TodoWrite snapshot.
+        var finalTasks: [TaskItem] = []
+        if !creationOrder.isEmpty {
+            for id in creationOrder {
+                if let wip = taskByID[id], wip.status != "deleted" {
+                    finalTasks.append(TaskItem(content: wip.content, status: wip.status))
+                }
+            }
+        } else if !todoWriteFallback.isEmpty {
+            finalTasks = todoWriteFallback.compactMap { dict in
+                guard let c = dict["content"] as? String,
+                      let s = dict["status"] as? String else { return nil }
+                return TaskItem(content: c, status: s)
+            }
+        }
+        if let active = finalTasks.first(where: { $0.status == "in_progress" }) {
+            snap.currentTask = active.content
         }
         if let name = lastToolUseName {
             snap.lastTool = describe(tool: name, input: lastToolUseInput)
@@ -164,11 +222,7 @@ enum ClaudeSource {
         }
 
         // Phase-2 fields.
-        snap.tasks = lastTodos.compactMap { dict in
-            guard let content = dict["content"] as? String,
-                  let status = dict["status"] as? String else { return nil }
-            return TaskItem(content: content, status: status)
-        }
+        snap.tasks = finalTasks
         snap.filesEdited = filesEditedOrder
         snap.toolCallCounts = toolCounts
         snap.userTurns = userTurns
@@ -190,6 +244,27 @@ enum ClaudeSource {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+
+    /// Pull the assigned task ID out of "Task #N created successfully: ..."
+    private static func parseTaskID(from body: String) -> String? {
+        guard let hashRange = body.range(of: "Task #") else { return nil }
+        var idx = hashRange.upperBound
+        var digits = ""
+        while idx < body.endIndex, body[idx].isNumber {
+            digits.append(body[idx])
+            idx = body.index(after: idx)
+        }
+        return digits.isEmpty ? nil : digits
+    }
+
+    /// Tool results carry their body either as a plain String or as an array
+    /// of `{type: "text", text: "..."}` blocks.
+    private static func extractToolResultText(_ content: Any?) -> String? {
+        if let s = content as? String { return s }
+        guard let arr = content as? [[String: Any]] else { return nil }
+        let parts = arr.compactMap { $0["text"] as? String }
+        return parts.joined(separator: " ")
     }
 
     private static func describe(tool: String, input: [String: Any]?) -> String {
