@@ -99,6 +99,17 @@ final class SessionModel: ObservableObject {
         all.append(contentsOf: ClaudeSource.readAll(since: cutoff))
         all.append(contentsOf: CodexSource.readAll(since: cutoff))
         all.append(contentsOf: CursorSource.readAll(since: cutoff))
+
+        // Only keep sessions whose underlying tool process is actually open
+        // right now. Cursor doesn't fork per workspace, so we gate on the
+        // Cursor app being alive instead of per-cwd matching.
+        let openIDs = LiveAgents.openSnapshotIDs()
+        let cursorAlive = LiveAgents.cursorRunning
+        all = all.filter { snap in
+            if snap.tool == "Cursor" { return cursorAlive }
+            return openIDs.contains(snap.id)
+        }
+
         // Most recently active first; running > others within the same time bucket.
         all.sort { a, b in
             let ad = a.updatedAt ?? .distantPast
