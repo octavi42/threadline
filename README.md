@@ -42,8 +42,8 @@ threadline toggle
 ```
 
 `show` opens a temporary top overlay inside tmux and closes when you press any key. Use `--plain` to print in the current pane, or `--no-wait` for scripts.
-`top` opens Threadline in tmux's top status area.
-`toggle` shows the top status area if hidden, or restores your previous tmux status layout if visible.
+`top` adds Threadline to tmux's top pane border while keeping your normal bottom status bar.
+`toggle` shows that top Threadline border if hidden, or restores your previous pane border if visible.
 
 Example tmux bindings:
 

@@ -21,6 +21,12 @@ STATUS_PREV_OPTIONS = {
 }
 STATUS_PREV_FORMAT_PREFIX = "@threadline_prev_status_format_"
 STATUS_LINES = 5
+BORDER_ACTIVE_OPTION = "@threadline_border_active"
+BORDER_TARGET_OPTION = "@threadline_border_target_pane"
+BORDER_PREV_OPTIONS = {
+    "pane-border-status": "@threadline_prev_pane_border_status",
+    "pane-border-format": "@threadline_prev_pane_border_format",
+}
 
 
 def build_and_cache_summary(compact: bool = False) -> str:
@@ -81,6 +87,12 @@ def status_line_command(index: int) -> int:
     return 0
 
 
+def border_line_command() -> int:
+    lines = compact_summary_lines()
+    print(lines[1] if len(lines) > 1 else "Threadline")
+    return 0
+
+
 def show_command(max_age: int, wait: bool, compact: bool) -> int:
     summary = build_and_cache_summary(compact=compact) if compact or should_refresh(max_age) else read_summary()
     if not summary:
@@ -124,6 +136,35 @@ def tmux_pane_exists(pane_id: str) -> bool:
         return False
     completed = run_tmux(["display-message", "-p", "-t", pane_id, "#{pane_id}"])
     return completed.returncode == 0 and completed.stdout.strip() == pane_id
+
+
+def pane_process_command(pid: str) -> str:
+    completed = subprocess.run(
+        ["ps", "-p", pid, "-o", "command="],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return completed.stdout.strip()
+
+
+def kill_stale_watch_panes() -> int:
+    completed = run_tmux(["list-panes", "-a", "-F", "#{pane_id} #{pane_pid}"])
+    if completed.returncode != 0:
+        return 0
+
+    killed = 0
+    for line in completed.stdout.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        pane_id, pid = parts
+        command = pane_process_command(pid)
+        if "threadline watch --compact" not in command:
+            continue
+        run_tmux(["kill-pane", "-t", pane_id])
+        killed += 1
+    return killed
 
 
 def show_top_command(height: int) -> int:
@@ -221,6 +262,11 @@ def status_active() -> bool:
     return completed.stdout.strip() == "1"
 
 
+def border_active() -> bool:
+    completed = run_tmux(["show-option", "-gqv", BORDER_ACTIVE_OPTION])
+    return completed.stdout.strip() == "1"
+
+
 def open_status_top(interval: int) -> int:
     target_pane = os.environ.get("TMUX_PANE")
     if not target_pane:
@@ -273,17 +319,95 @@ def close_status_top() -> bool:
     return True
 
 
+def open_border_top() -> int:
+    target_pane = os.environ.get("TMUX_PANE")
+    if not target_pane:
+        print("Threadline toggle must be run inside tmux.", file=sys.stderr)
+        return 1
+
+    close_status_top()
+    close_top_pane()
+
+    for option, previous_option in BORDER_PREV_OPTIONS.items():
+        set_tmux_option(previous_option, tmux_option(option))
+
+    set_tmux_option(BORDER_TARGET_OPTION, target_pane)
+    set_tmux_option(BORDER_ACTIVE_OPTION, "1")
+    set_tmux_option("pane-border-status", "top")
+    set_tmux_option(
+        "pane-border-format",
+        "#[align=left]#(THREADLINE_TARGET_PANE=#{@threadline_border_target_pane} threadline border-line)",
+    )
+    run_tmux(["refresh-client", "-S"])
+    return 0
+
+
+def close_border_top() -> bool:
+    if not border_active():
+        return False
+
+    for option, previous_option in BORDER_PREV_OPTIONS.items():
+        previous = tmux_option(previous_option)
+        if previous:
+            set_tmux_option(option, previous)
+        else:
+            unset_tmux_option(option)
+        unset_tmux_option(previous_option)
+
+    unset_tmux_option(BORDER_TARGET_OPTION)
+    unset_tmux_option(BORDER_ACTIVE_OPTION)
+    run_tmux(["refresh-client", "-S"])
+    return True
+
+
+def reset_command() -> int:
+    killed = kill_stale_watch_panes()
+    restored = close_status_top()
+    border_restored = close_border_top()
+    close_top_pane()
+
+    for option in [
+        TOP_PANE_OPTION,
+        STATUS_ACTIVE_OPTION,
+        STATUS_TARGET_OPTION,
+        BORDER_ACTIVE_OPTION,
+        BORDER_TARGET_OPTION,
+    ]:
+        unset_tmux_option(option)
+    for previous_option in STATUS_PREV_OPTIONS.values():
+        unset_tmux_option(previous_option)
+    for previous_option in BORDER_PREV_OPTIONS.values():
+        unset_tmux_option(previous_option)
+    for index in range(STATUS_LINES):
+        previous_key = f"{STATUS_PREV_FORMAT_PREFIX}{index}"
+        previous = tmux_option(previous_key)
+        current = tmux_option(f"status-format[{index}]")
+        if previous:
+            set_tmux_option(f"status-format[{index}]", previous)
+        elif "threadline status-line" in current:
+            unset_tmux_option(f"status-format[{index}]")
+        unset_tmux_option(previous_key)
+
+    run_tmux(["refresh-client", "-S"])
+    print(f"Threadline reset complete. Killed {killed} stale pane(s).")
+    if restored or border_restored:
+        print("Restored previous tmux display settings.")
+    return 0
+
+
 def top_command(height: int, interval: int) -> int:
     del height
-    close_status_top()
-    return open_status_top(interval=interval)
+    del interval
+    close_border_top()
+    return open_border_top()
 
 
 def toggle_command(height: int, interval: int) -> int:
     del height
-    if close_status_top():
+    del interval
+    if close_border_top():
         return 0
-    return open_status_top(interval=interval)
+    return open_border_top()
 
 
 def main() -> int:
@@ -329,6 +453,8 @@ def main() -> int:
     status_line_parser = subparsers.add_parser("status-line", help=argparse.SUPPRESS)
     status_line_parser.add_argument("index", type=int)
 
+    subparsers.add_parser("border-line", help=argparse.SUPPRESS)
+
     watch_parser = subparsers.add_parser("watch", help="Keep the session summary visible.")
     watch_parser.add_argument(
         "--interval",
@@ -370,6 +496,8 @@ def main() -> int:
         help="Refresh interval in seconds.",
     )
 
+    subparsers.add_parser("reset", help="Remove stale Threadline tmux panes and status options.")
+
     args = parser.parse_args()
 
     if args.command == "summarize":
@@ -383,12 +511,16 @@ def main() -> int:
         return 0
     if args.command == "status-line":
         return status_line_command(index=args.index)
+    if args.command == "border-line":
+        return border_line_command()
     if args.command == "watch":
         return watch_command(interval=args.interval, compact=args.compact)
     if args.command == "top":
         return top_command(height=args.height, interval=args.interval)
     if args.command == "toggle":
         return toggle_command(height=args.height, interval=args.interval)
+    if args.command == "reset":
+        return reset_command()
 
     parser.error(f"unknown command: {args.command}")
     return 2
