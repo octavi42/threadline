@@ -35,9 +35,10 @@ final class Summarizer {
     private let processSemaphore = DispatchSemaphore(value: 2)
 
     private static let summaryPrompt =
-        "Summarize this coding-assistant session in 1–2 short sentences. " +
-        "Focus on what the developer is working on and the current intent. " +
-        "No preamble, no fluff."
+        "Summarize this coding-assistant session in 2–3 short sentences. " +
+        "Capture the overall arc of the session — the dominant theme of what " +
+        "the developer has been working on — and end with what's currently in " +
+        "focus. Lead with the theme, not the latest turn. No preamble, no fluff."
 
     private var cacheDir: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -152,7 +153,7 @@ final class Summarizer {
         req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
         let payload: [String: Any] = [
             "model": "claude-haiku-4-5",
-            "max_tokens": 160,
+            "max_tokens": 280,
             "system": promptWithContinuity(previous: previous),
             "messages": [["role": "user", "content": content]],
         ]
@@ -254,16 +255,20 @@ final class Summarizer {
 
     // MARK: - prompt building
 
-    /// Read the JSONL tail and extract human-readable user/assistant text,
-    /// stripping tool-use noise. Caps total length so the model doesn't
-    /// receive megabytes of context.
+    /// Read the WHOLE JSONL and extract every human-readable user/assistant
+    /// turn (tool-use noise stripped). If the total exceeds the prompt
+    /// budget, keep the head and the tail with an ellipsis between so the
+    /// LLM sees both how the session opened and the recent activity.
     private func buildPrompt(from path: String) -> String? {
-        guard let tail = tailOfFile(path: path, maxBytes: 32 * 1024) else { return nil }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return nil
+        }
         var snippets: [String] = []
-        for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
+            // Claude shape
             if let msg = obj["message"] as? [String: Any] {
                 let role = msg["role"] as? String ?? ""
                 if let content = msg["content"] as? [[String: Any]] {
@@ -274,11 +279,12 @@ final class Summarizer {
                             snippets.append("\(role): \(t)")
                         }
                     }
-                } else if let text = msg["content"] as? String, !text.isEmpty {
-                    snippets.append("\(role): \(text)")
+                } else if let s = msg["content"] as? String, !s.isEmpty {
+                    snippets.append("\(role): \(s)")
                 }
                 continue
             }
+            // Codex shape
             if obj["type"] as? String == "event_msg",
                let payload = obj["payload"] as? [String: Any] {
                 let et = payload["type"] as? String
@@ -290,8 +296,23 @@ final class Summarizer {
             }
         }
         if snippets.isEmpty { return nil }
-        let kept = snippets.suffix(20).map { $0.prefix(800) }.map(String.init)
-        return kept.joined(separator: "\n\n")
+
+        // Cap per-snippet length so a single huge turn can't blow the budget.
+        let trimmed = snippets.map { String($0.prefix(2000)) }
+        let joined = trimmed.joined(separator: "\n\n")
+
+        // Total budget: ~100 KB of text (~25K tokens — well within haiku's
+        // 200K context window with room for the system prompt + response).
+        let maxBytes = 100 * 1024
+        if joined.utf8.count <= maxBytes { return joined }
+
+        // Too long: keep first 20% + last 80%, with an ellipsis between, so
+        // the LLM sees the framing and the recent arc.
+        let headBytes = maxBytes / 5
+        let tailBytes = maxBytes - headBytes - 32
+        let head = String(joined.prefix(headBytes))
+        let tail = String(joined.suffix(tailBytes))
+        return head + "\n\n[…earlier turns omitted…]\n\n" + tail
     }
 
     // MARK: - disk cache
@@ -317,12 +338,16 @@ final class Summarizer {
         }
     }
 
+    /// Bump when the prompt or extraction logic changes — old cache entries
+    /// then naturally turn into cache misses and get re-generated.
+    private static let cacheVersion = 2
+
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037
         for byte in jsonlPath.utf8 {
             hash ^= UInt64(byte)
             hash &*= 1099511628211
         }
-        return "\(cacheDir)/\(String(hash, radix: 16)).summary.json"
+        return "\(cacheDir)/\(String(hash, radix: 16)).v\(Summarizer.cacheVersion).summary.json"
     }
 }
