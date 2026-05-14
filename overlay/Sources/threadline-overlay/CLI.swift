@@ -2,6 +2,38 @@ import Foundation
 import Darwin
 
 enum CLI {
+    /// Fire-and-forget shell hook ping. Must be FAST and silent on failure —
+    /// it runs on every prompt. Does not auto-spawn the daemon: if no daemon
+    /// is listening, the touch is dropped.
+    static func touch(args: [String]) {
+        var cwd: String?
+        var pid: Int?
+        var i = 0
+        while i < args.count {
+            let a = args[i]
+            let next = i + 1 < args.count ? args[i + 1] : nil
+            switch a {
+            case "--cwd": cwd = next; i += 2
+            case "--pid": pid = next.flatMap(Int.init); i += 2
+            case "--tty": i += 2     // accepted but not used
+            default:      i += 1
+            }
+        }
+        guard let cwd = cwd, let pid = pid else {
+            // Silently exit on malformed args — don't break prompts.
+            return
+        }
+        let fd = IPC.connect()
+        if fd < 0 { return }
+        defer { close(fd) }
+        let obj: [String: Any] = ["cwd": cwd, "pid": pid]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []),
+              let json = String(data: data, encoding: .utf8) else { return }
+        IPC.writeLine(fd, "touch \(json)")
+        // Wait briefly for ack to keep the socket buffered, then exit.
+        _ = IPC.readLine(fd)
+    }
+
     /// Send a one-line command to the daemon. If no daemon is running:
     ///   • if the LaunchAgent isn't installed yet, run install (which bootstraps it)
     ///   • otherwise, spawn a foreground daemon

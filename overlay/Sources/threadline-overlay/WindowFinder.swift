@@ -26,6 +26,7 @@ struct WindowFinder {
     struct Target {
         let bundleID: String
         let appName: String
+        let pid: pid_t
         let frame: CGRect       // CGWindow-space (top-left origin)
     }
 
@@ -58,6 +59,7 @@ struct WindowFinder {
         guard let pick = best else { return nil }
         return Target(bundleID: bid,
                       appName: app.localizedName ?? bid,
+                      pid: pid,
                       frame: pick.rect)
     }
 

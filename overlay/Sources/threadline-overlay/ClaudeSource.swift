@@ -1,27 +1,44 @@
 import Foundation
 
 enum ClaudeSource {
-    static func read() -> SourceSnapshot {
+    static func read(scopeCwd: String? = nil) -> SourceSnapshot {
         let fm = FileManager.default
         let root = (fm.homeDirectoryForCurrentUser.path as NSString)
             .appendingPathComponent(".claude/projects")
         var snap = SourceSnapshot(id: "claude", tool: "Claude", badge: "CLD")
 
-        guard let projects = try? fm.contentsOfDirectory(atPath: root) else {
-            snap.state = .none; snap.note = "no session"
-            return snap
+        // Fast path: when scope cwd is set, look inside the encoded project
+        // dir first. Falls back to global scan if it's empty / missing.
+        var newest: (path: String, mtime: Date)?
+        if let scope = scopeCwd {
+            let encoded = scope.replacingOccurrences(of: "/", with: "-")
+            let scopedDir = (root as NSString).appendingPathComponent(encoded)
+            if let files = try? fm.contentsOfDirectory(atPath: scopedDir) {
+                for f in files where f.hasSuffix(".jsonl") {
+                    let path = (scopedDir as NSString).appendingPathComponent(f)
+                    if let attrs = try? fm.attributesOfItem(atPath: path),
+                       let m = attrs[.modificationDate] as? Date {
+                        if newest == nil || m > newest!.mtime { newest = (path, m) }
+                    }
+                }
+            }
         }
 
-        // Newest JSONL across all project subdirs.
-        var newest: (path: String, mtime: Date)?
-        for proj in projects {
-            let projDir = (root as NSString).appendingPathComponent(proj)
-            guard let files = try? fm.contentsOfDirectory(atPath: projDir) else { continue }
-            for f in files where f.hasSuffix(".jsonl") {
-                let path = (projDir as NSString).appendingPathComponent(f)
-                if let attrs = try? fm.attributesOfItem(atPath: path),
-                   let m = attrs[.modificationDate] as? Date {
-                    if newest == nil || m > newest!.mtime { newest = (path, m) }
+        // Global scan if no scope or no scoped match.
+        if newest == nil {
+            guard let projects = try? fm.contentsOfDirectory(atPath: root) else {
+                snap.state = .none; snap.note = "no session"
+                return snap
+            }
+            for proj in projects {
+                let projDir = (root as NSString).appendingPathComponent(proj)
+                guard let files = try? fm.contentsOfDirectory(atPath: projDir) else { continue }
+                for f in files where f.hasSuffix(".jsonl") {
+                    let path = (projDir as NSString).appendingPathComponent(f)
+                    if let attrs = try? fm.attributesOfItem(atPath: path),
+                       let m = attrs[.modificationDate] as? Date {
+                        if newest == nil || m > newest!.mtime { newest = (path, m) }
+                    }
                 }
             }
         }

@@ -97,12 +97,14 @@ final class OverlayController {
                 if panel.isVisible { panel.orderOut(nil) }
             } else {
                 model.setAnchor(bundleID: nil)
+                model.setScope(terminalPid: nil)
                 if !panel.isVisible { panel.orderFrontRegardless() }
                 positionTopOfScreen()
             }
             return
         }
         model.setAnchor(bundleID: target.bundleID)
+        model.setScope(terminalPid: target.pid)
         anchor(to: target)
         if !panel.isVisible { panel.orderFrontRegardless() }
     }

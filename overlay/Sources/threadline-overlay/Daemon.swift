@@ -56,11 +56,30 @@ enum Daemon {
         }
         let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
         let cmd = parts.first ?? ""
+        let rest = parts.count > 1 ? parts[1] : ""
+        // `touch` is the hot path (every shell prompt) — handle off the main
+        // thread to avoid any UI contention.
+        if cmd == "touch" {
+            handleTouch(payload: rest)
+            IPC.writeLine(client, "ok")
+            close(client)
+            return
+        }
         DispatchQueue.main.async {
             let reply = dispatch(cmd: cmd)
             IPC.writeLine(client, reply)
             close(client)
         }
+    }
+
+    private static func handleTouch(payload: String) {
+        guard let data = payload.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        guard let cwd = obj["cwd"] as? String,
+              let pidNum = obj["pid"] as? Int
+        else { return }
+        ShellRegistry.shared.touch(pid: pid_t(pidNum), cwd: cwd)
     }
 
     private static func dispatch(cmd: String) -> String {
@@ -77,8 +96,10 @@ enum Daemon {
         case "status":
             let f = c.panel.frame
             let target = WindowFinder.frontmostTarget()
-            let anchor = target.map { "anchored=\($0.appName) frame=\(Int($0.frame.origin.x)),\(Int($0.frame.origin.y)),\(Int($0.frame.width))x\(Int($0.frame.height))" } ?? "no-anchor"
-            return "running pid=\(getpid()) visible=\(c.panel.isVisible) panel=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) \(anchor)"
+            let anchorPid = target.map { "\($0.appName)(pid=\($0.pid))" } ?? "no-anchor"
+            let scope = target.flatMap { ShellRegistry.shared.scopeCwd(terminalPid: $0.pid) } ?? "—"
+            let reg = ShellRegistry.shared.count()
+            return "running pid=\(getpid()) visible=\(c.panel.isVisible) panel=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) anchor=\(anchorPid) scope=\(scope) shells=\(reg)"
         case "quit":
             DispatchQueue.main.async {
                 NSApp.terminate(nil)

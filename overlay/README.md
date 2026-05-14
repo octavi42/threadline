@@ -43,6 +43,32 @@ threadline-overlay uninstall # remove LaunchAgent + binary
 
 The first invocation auto-installs the LaunchAgent if `install.sh` was skipped.
 
+## How per-tab scoping works
+
+When `install` runs, a marker block is appended to `~/.zshrc` and `~/.bashrc`:
+
+```sh
+# >>> threadline-overlay >>>
+__threadline_touch() {
+    "/Users/you/.local/bin/threadline-overlay" touch --cwd "$PWD" --pid $$ >/dev/null 2>&1 &
+    disown >/dev/null 2>&1 || true
+}
+# … wires it into precmd_functions / PROMPT_COMMAND
+# <<< threadline-overlay <<<
+```
+
+Each prompt pings the daemon with `(pid, cwd)`. The daemon walks the shell's
+parent chain via `sysctl(KERN_PROC_PID)` and finds which terminal app owns it.
+For the frontmost terminal, the most recently-touched shell's cwd becomes the
+scope; the source readers then filter to sessions matching that cwd.
+
+Result: switch tabs → next prompt in the focused tab updates the scope →
+panel flips. Open a new window → its first prompt registers. `uninstall`
+strips the marker block.
+
+Falls back to global newest when no touch matches (e.g. no shell hook
+installed, or focused window is Cursor/VS Code).
+
 ## How it follows the terminal
 
 When follow mode is on, the daemon polls the frontmost app at 15 Hz. If it's

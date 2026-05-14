@@ -78,6 +78,8 @@ final class SessionModel: ObservableObject {
     @Published var themeBackground: NSColor = TerminalTheme.fallback
     /// Whether the theme background is dark — drives text contrast in the view.
     @Published var themeIsDark: Bool = true
+    /// Active scope cwd resolved from ShellRegistry; nil = global.
+    @Published var scopeCwd: String?
     private var timer: Timer?
 
     func start() {
@@ -88,12 +90,28 @@ final class SessionModel: ObservableObject {
     }
 
     func refresh() {
-        let claude = ClaudeSource.read()
-        let codex = CodexSource.read()
-        let cursor = CursorSource.read()
+        let scope = scopeCwd
+        let claude = ClaudeSource.read(scopeCwd: scope)
+        let codex = CodexSource.read(scopeCwd: scope)
+        let cursor = CursorSource.read(scopeCwd: scope)
         let next = [claude, codex, cursor]
         DispatchQueue.main.async { [weak self] in
             self?.snapshots = next
+        }
+    }
+
+    /// Called by the controller each tick with the frontmost terminal PID.
+    /// Resolves the scope cwd via ShellRegistry (or clears it for non-targets).
+    func setScope(terminalPid: pid_t?) {
+        let next: String? = terminalPid.flatMap { ShellRegistry.shared.scopeCwd(terminalPid: $0) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.scopeCwd != next {
+                self.scopeCwd = next
+                // Re-read with the new scope immediately so the panel updates
+                // without waiting for the 3s poll.
+                self.refresh()
+            }
         }
     }
 

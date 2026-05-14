@@ -1,13 +1,17 @@
 import Foundation
 
 enum CodexSource {
-    static func read() -> SourceSnapshot {
+    static func read(scopeCwd: String? = nil) -> SourceSnapshot {
         let fm = FileManager.default
         let root = (fm.homeDirectoryForCurrentUser.path as NSString)
             .appendingPathComponent(".codex/sessions")
         var snap = SourceSnapshot(id: "codex", tool: "Codex", badge: "CDX")
 
-        guard let url = newestJSONL(under: URL(fileURLWithPath: root)) else {
+        // Prefer a session whose `session_meta.cwd` matches the scope cwd.
+        // Scan the top-N newest jsonls and check their head; fall back to
+        // global newest if none match.
+        guard let url = newestJSONL(under: URL(fileURLWithPath: root),
+                                    scopeCwd: scopeCwd) else {
             snap.state = .none; snap.note = "no session"
             return snap
         }
@@ -91,19 +95,43 @@ enum CodexSource {
         return snap
     }
 
-    private static func newestJSONL(under root: URL) -> URL? {
+    private static func newestJSONL(under root: URL, scopeCwd: String?) -> URL? {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(at: root,
                                              includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
                                              options: [.skipsHiddenFiles])
         else { return nil }
-        var best: (URL, Date)?
+        var all: [(URL, Date)] = []
         for case let u as URL in enumerator {
             guard u.pathExtension == "jsonl" else { continue }
             let v = try? u.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
             guard v?.isRegularFile == true, let m = v?.contentModificationDate else { continue }
-            if best == nil || m > best!.1 { best = (u, m) }
+            all.append((u, m))
         }
-        return best?.0
+        all.sort { $0.1 > $1.1 }
+
+        // No scope → newest globally.
+        guard let scope = scopeCwd, !scope.isEmpty else { return all.first?.0 }
+
+        // With scope: read head of top-N to find one whose session_meta.cwd
+        // is at or below the scope cwd.
+        let candidates = all.prefix(20)
+        for (url, _) in candidates {
+            if let head = headOfFile(path: url.path, maxBytes: 4 * 1024) {
+                for raw in head.split(separator: "\n", omittingEmptySubsequences: true) {
+                    guard let data = String(raw).data(using: .utf8),
+                          let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          rec["type"] as? String == "session_meta",
+                          let payload = rec["payload"] as? [String: Any],
+                          let metaCwd = payload["cwd"] as? String
+                    else { continue }
+                    if metaCwd == scope || metaCwd.hasPrefix(scope + "/") {
+                        return url
+                    }
+                    break  // first record is always session_meta; no point reading more
+                }
+            }
+        }
+        return all.first?.0
     }
 }

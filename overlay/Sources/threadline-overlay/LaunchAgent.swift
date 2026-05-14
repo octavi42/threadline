@@ -82,6 +82,13 @@ enum LaunchAgent {
         _ = runLaunchctl(["kickstart", "-k", "gui/\(uid)/\(label)"])
         print("installed → \(target)")
         print("plist     → \(plistPath)")
+
+        let modifiedShellFiles = ShellHook.install(binaryPath: target)
+        if !modifiedShellFiles.isEmpty {
+            print("shell hook → \(modifiedShellFiles.joined(separator: ", "))")
+            print("            (open a new shell to activate it)")
+        }
+
         print("\nadd ~/.local/bin to PATH if you haven't:")
         print("  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc")
     }
@@ -90,6 +97,10 @@ enum LaunchAgent {
         let uid = getuid()
         _ = runLaunchctl(["bootout", "gui/\(uid)/\(label)"])
         try? FileManager.default.removeItem(atPath: plistPath)
+        let removedFrom = ShellHook.uninstall()
+        if !removedFrom.isEmpty {
+            print("removed shell hook from: \(removedFrom.joined(separator: ", "))")
+        }
         print("uninstalled")
     }
 

@@ -40,10 +40,20 @@ struct ContentView: View {
 
     private var header: some View {
         let totals = aggregate(model.snapshots)
+        let scopeText: String? = model.scopeCwd.map {
+            ($0 as NSString).abbreviatingWithTildeInPath
+        }
         return HStack(spacing: 10) {
             Text("threadline")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundColor(secondaryText)
+            if let scope = scopeText {
+                Text("· \(scope)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
             Spacer()
             HStack(spacing: 10) {
                 if totals.active > 0 {
