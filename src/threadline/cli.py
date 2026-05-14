@@ -12,6 +12,15 @@ from .collect import collect_context
 from .summarize import render_compact_summary, render_summary
 
 TOP_PANE_OPTION = "@threadline_top_pane"
+STATUS_ACTIVE_OPTION = "@threadline_status_active"
+STATUS_TARGET_OPTION = "@threadline_target_pane"
+STATUS_PREV_OPTIONS = {
+    "status": "@threadline_prev_status",
+    "status-position": "@threadline_prev_status_position",
+    "status-interval": "@threadline_prev_status_interval",
+}
+STATUS_PREV_FORMAT_PREFIX = "@threadline_prev_status_format_"
+STATUS_LINES = 5
 
 
 def build_and_cache_summary(compact: bool = False) -> str:
@@ -52,6 +61,26 @@ def wait_for_key() -> None:
         print()
 
 
+def wait_for_key_compact() -> None:
+    print("Press any key to close.", end="", flush=True)
+    os.system("stty -echo -icanon min 1 time 0")
+    try:
+        sys.stdin.read(1)
+    finally:
+        os.system("stty sane")
+
+
+def compact_summary_lines() -> list[str]:
+    return build_and_cache_summary(compact=True).splitlines()
+
+
+def status_line_command(index: int) -> int:
+    lines = compact_summary_lines()
+    if 0 <= index < len(lines):
+        print(lines[index])
+    return 0
+
+
 def show_command(max_age: int, wait: bool, compact: bool) -> int:
     summary = build_and_cache_summary(compact=compact) if compact or should_refresh(max_age) else read_summary()
     if not summary:
@@ -86,11 +115,46 @@ def run_tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def in_tmux() -> bool:
+    return bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
+
+
 def tmux_pane_exists(pane_id: str) -> bool:
     if not pane_id:
         return False
     completed = run_tmux(["display-message", "-p", "-t", pane_id, "#{pane_id}"])
     return completed.returncode == 0 and completed.stdout.strip() == pane_id
+
+
+def show_top_command(height: int) -> int:
+    target_pane = os.environ.get("TMUX_PANE")
+    if not target_pane:
+        return show_command(max_age=0, wait=True, compact=False)
+
+    command = (
+        f"THREADLINE_TARGET_PANE={target_pane} "
+        "threadline show --compact --max-age 0 --no-wait; "
+        "threadline wait-key"
+    )
+    completed = run_tmux(
+        [
+            "display-popup",
+            "-E",
+            "-x",
+            "0",
+            "-y",
+            "0",
+            "-w",
+            "100%",
+            "-h",
+            str(height),
+            command,
+        ]
+    )
+    if completed.returncode != 0:
+        print(completed.stderr.strip(), file=sys.stderr)
+        return completed.returncode
+    return 0
 
 
 def open_top_pane(height: int, interval: int) -> int:
@@ -139,15 +203,87 @@ def close_top_pane() -> bool:
     return True
 
 
-def top_command(height: int, interval: int) -> int:
+def tmux_option(name: str) -> str:
+    completed = run_tmux(["show-option", "-gqv", name])
+    return completed.stdout.rstrip("\n")
+
+
+def set_tmux_option(name: str, value: str) -> None:
+    run_tmux(["set-option", "-gq", name, value])
+
+
+def unset_tmux_option(name: str) -> None:
+    run_tmux(["set-option", "-guq", name])
+
+
+def status_active() -> bool:
+    completed = run_tmux(["show-option", "-gqv", STATUS_ACTIVE_OPTION])
+    return completed.stdout.strip() == "1"
+
+
+def open_status_top(interval: int) -> int:
+    target_pane = os.environ.get("TMUX_PANE")
+    if not target_pane:
+        print("Threadline toggle must be run inside tmux.", file=sys.stderr)
+        return 1
+
     close_top_pane()
-    return open_top_pane(height=height, interval=interval)
+    for option, previous_option in STATUS_PREV_OPTIONS.items():
+        set_tmux_option(previous_option, tmux_option(option))
+    for index in range(STATUS_LINES):
+        set_tmux_option(f"{STATUS_PREV_FORMAT_PREFIX}{index}", tmux_option(f"status-format[{index}]"))
+
+    set_tmux_option(STATUS_TARGET_OPTION, target_pane)
+    set_tmux_option(STATUS_ACTIVE_OPTION, "1")
+    set_tmux_option("status", str(STATUS_LINES))
+    set_tmux_option("status-position", "top")
+    set_tmux_option("status-interval", str(interval))
+
+    for index in range(STATUS_LINES):
+        set_tmux_option(
+            f"status-format[{index}]",
+            f"#(THREADLINE_TARGET_PANE=#{{@threadline_target_pane}} threadline status-line {index})",
+        )
+
+    run_tmux(["refresh-client", "-S"])
+    return 0
+
+
+def close_status_top() -> bool:
+    if not status_active():
+        return False
+
+    for option, previous_option in STATUS_PREV_OPTIONS.items():
+        previous = tmux_option(previous_option)
+        if previous:
+            set_tmux_option(option, previous)
+        unset_tmux_option(previous_option)
+
+    for index in range(STATUS_LINES):
+        previous = tmux_option(f"{STATUS_PREV_FORMAT_PREFIX}{index}")
+        if previous:
+            set_tmux_option(f"status-format[{index}]", previous)
+        else:
+            unset_tmux_option(f"status-format[{index}]")
+        unset_tmux_option(f"{STATUS_PREV_FORMAT_PREFIX}{index}")
+
+    unset_tmux_option(STATUS_TARGET_OPTION)
+    unset_tmux_option(STATUS_ACTIVE_OPTION)
+    run_tmux(["refresh-client", "-S"])
+    return True
+
+
+def top_command(height: int, interval: int) -> int:
+    del height
+    close_status_top()
+    return open_status_top(interval=interval)
 
 
 def toggle_command(height: int, interval: int) -> int:
-    if close_top_pane():
+    del height
+    if close_status_top():
         return 0
-    return open_top_pane(height=height, interval=interval)
+    return open_status_top(interval=interval)
 
 
 def main() -> int:
@@ -176,6 +312,22 @@ def main() -> int:
         action="store_true",
         help="Use the compact tmux bar layout.",
     )
+    show_parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Print in the current pane instead of opening a temporary tmux top pane.",
+    )
+    show_parser.add_argument(
+        "--height",
+        type=int,
+        default=6,
+        help="Height of the temporary tmux top pane.",
+    )
+
+    subparsers.add_parser("wait-key", help=argparse.SUPPRESS)
+
+    status_line_parser = subparsers.add_parser("status-line", help=argparse.SUPPRESS)
+    status_line_parser.add_argument("index", type=int)
 
     watch_parser = subparsers.add_parser("watch", help="Keep the session summary visible.")
     watch_parser.add_argument(
@@ -190,12 +342,12 @@ def main() -> int:
         help="Use the compact tmux bar layout.",
     )
 
-    top_parser = subparsers.add_parser("top", help="Open a fixed Threadline pane above this pane.")
+    top_parser = subparsers.add_parser("top", help="Show Threadline in tmux's top status area.")
     top_parser.add_argument(
         "--height",
         type=int,
         default=5,
-        help="Height of the fixed top pane.",
+        help="Ignored; kept for compatibility.",
     )
     top_parser.add_argument(
         "--interval",
@@ -204,12 +356,12 @@ def main() -> int:
         help="Refresh interval in seconds.",
     )
 
-    toggle_parser = subparsers.add_parser("toggle", help="Toggle the fixed Threadline top pane.")
+    toggle_parser = subparsers.add_parser("toggle", help="Toggle Threadline in tmux's top status area.")
     toggle_parser.add_argument(
         "--height",
         type=int,
         default=5,
-        help="Height of the fixed top pane.",
+        help="Ignored; kept for compatibility.",
     )
     toggle_parser.add_argument(
         "--interval",
@@ -223,7 +375,14 @@ def main() -> int:
     if args.command == "summarize":
         return summarize_command()
     if args.command == "show":
+        if in_tmux() and not args.plain and not args.compact and not args.no_wait:
+            return show_top_command(height=args.height)
         return show_command(max_age=args.max_age, wait=not args.no_wait, compact=args.compact)
+    if args.command == "wait-key":
+        wait_for_key_compact()
+        return 0
+    if args.command == "status-line":
+        return status_line_command(index=args.index)
     if args.command == "watch":
         return watch_command(interval=args.interval, compact=args.compact)
     if args.command == "top":

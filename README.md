@@ -41,14 +41,14 @@ threadline top
 threadline toggle
 ```
 
-`show` waits for one key before closing when it is attached to a real terminal. Use `--no-wait` for scripts.
-`top` opens a fixed compact Threadline pane above the current pane.
-`toggle` opens the fixed top pane if hidden, or closes it if visible.
+`show` opens a temporary top overlay inside tmux and closes when you press any key. Use `--plain` to print in the current pane, or `--no-wait` for scripts.
+`top` opens Threadline in tmux's top status area.
+`toggle` shows the top status area if hidden, or restores your previous tmux status layout if visible.
 
 Example tmux bindings:
 
 ```tmux
-bind-key t display-popup -E -w 70% -h 40% 'threadline show'
-bind-key T display-popup -E -w 70% -h 40% 'threadline summarize && threadline show'
-bind-key b run-shell 'threadline toggle'
+bind-key t run-shell 'TMUX_PANE=#{pane_id} threadline show'
+bind-key T run-shell 'TMUX_PANE=#{pane_id} threadline summarize && TMUX_PANE=#{pane_id} threadline show'
+bind-key b run-shell 'TMUX_PANE=#{pane_id} threadline toggle'
 ```
