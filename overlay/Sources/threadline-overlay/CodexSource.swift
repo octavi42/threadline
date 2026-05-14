@@ -38,7 +38,10 @@ enum CodexSource {
     }
 
     private static func readSessionCwd(at url: URL) -> String? {
-        guard let head = headOfFile(path: url.path, maxBytes: 4 * 1024) else { return nil }
+        // session_meta records carry the full system prompt and can exceed
+        // 4KB; read a larger head so the first newline (record terminator)
+        // is included.
+        guard let head = headOfFile(path: url.path, maxBytes: 64 * 1024) else { return nil }
         for raw in head.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
                   let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
