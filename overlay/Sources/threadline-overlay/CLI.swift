@@ -86,8 +86,8 @@ enum CLI {
         task.executableURL = URL(fileURLWithPath: fullPath)
         task.arguments = ["daemon"]
         task.standardInput = nil
-        task.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
         do {
             try task.run()
             return true

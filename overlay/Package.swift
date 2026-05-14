@@ -9,6 +9,12 @@ let package = Package(
             name: "threadline-overlay",
             path: "Sources/threadline-overlay",
             linkerSettings: [.linkedLibrary("sqlite3")]
-        )
+        ),
+        .testTarget(
+            name: "threadline-overlayTests",
+            dependencies: ["threadline-overlay"],
+            path: "Tests/threadline-overlayTests",
+            resources: [.process("Fixtures")]
+        ),
     ]
 )

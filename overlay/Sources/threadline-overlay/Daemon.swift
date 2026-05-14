@@ -43,13 +43,32 @@ enum Daemon {
         }
         listenerFD = fd
 
-        // Accept loop on a background dispatch queue.
+        // Accept loop on a background dispatch queue. Permanent socket
+        // failures (EBADF, ENOTSOCK) should be fatal — looping with no delay
+        // would pin a CPU and produce no useful work.
         DispatchQueue.global(qos: .utility).async {
             while true {
                 let client = accept(fd, nil, nil)
-                if client < 0 { continue }
-                DispatchQueue.global(qos: .userInitiated).async {
-                    handleClient(client)
+                if client >= 0 {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        handleClient(client)
+                    }
+                    continue
+                }
+                let err = errno
+                switch err {
+                case EAGAIN, EINTR, ECONNABORTED:
+                    // Transient — try again after a short pause.
+                    usleep(10_000)
+                case EBADF, ENOTSOCK, EINVAL:
+                    FileHandle.standardError.write(
+                        Data("accept failed permanently (errno=\(err)); exiting\n".utf8))
+                    exit(1)
+                default:
+                    // Unknown — log and try again, but don't spin.
+                    FileHandle.standardError.write(
+                        Data("accept transient error (errno=\(err))\n".utf8))
+                    usleep(100_000)
                 }
             }
         }

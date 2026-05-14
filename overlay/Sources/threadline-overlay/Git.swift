@@ -48,7 +48,7 @@ enum Git {
         p.arguments = args
         let pipe = Pipe()
         p.standardOutput = pipe
-        p.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         p.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()

@@ -112,8 +112,8 @@ enum LaunchAgent {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
         p.arguments = ["--force", "--sign", "-", path]
-        p.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-        p.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return }
         p.waitUntilExit()
     }
@@ -123,8 +123,8 @@ enum LaunchAgent {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         task.arguments = args
-        task.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
-        task.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
         do { try task.run() } catch { return -1 }
         task.waitUntilExit()
         return task.terminationStatus

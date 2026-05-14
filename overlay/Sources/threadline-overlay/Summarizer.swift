@@ -1,6 +1,7 @@
 import Foundation
 
-/// Generates 1-2 sentence "what this session is about" summaries.
+/// Generates 2-3 sentence "what this session is about" summaries that
+/// capture the overall arc plus the current focus.
 ///
 /// Auth model: shells out to the user's installed `claude` (`-p` print mode)
 /// or `codex` (`exec` non-interactive) CLI. That CLI uses whatever auth the
@@ -18,6 +19,22 @@ import Foundation
 /// per significant change.
 final class Summarizer {
     static let shared = Summarizer()
+
+    private init() {
+        purgeOldCacheVersions()
+    }
+
+    /// Remove cache files written by older prompt/extraction versions so we
+    /// don't slowly accumulate dead `.v1.summary.json` etc. on disk.
+    private func purgeOldCacheVersions() {
+        let fm = FileManager.default
+        let dir = cacheDir
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+        let activeSuffix = ".v\(Summarizer.cacheVersion).summary.json"
+        for name in entries where name.hasSuffix(".summary.json") && !name.hasSuffix(activeSuffix) {
+            try? fm.removeItem(atPath: (dir as NSString).appendingPathComponent(name))
+        }
+    }
 
     private struct CacheEntry {
         let mtime: Date
@@ -209,7 +226,7 @@ final class Summarizer {
         p.arguments = ["-l", "-c", "which \(binary)"]
         let pipe = Pipe()
         p.standardOutput = pipe
-        p.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         p.waitUntilExit()
         let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
@@ -225,7 +242,7 @@ final class Summarizer {
         let outputPipe = Pipe()
         proc.standardInput = inputPipe
         proc.standardOutput = outputPipe
-        proc.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        proc.standardError = FileHandle.nullDevice
 
         do { try proc.run() } catch { return nil }
 
