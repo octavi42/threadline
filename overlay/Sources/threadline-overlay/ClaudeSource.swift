@@ -185,6 +185,8 @@ enum ClaudeSource {
         // Cached by mtime so we only pay the full scan once per change.
         let aggregates = scanFullSession(jsonlPath: jsonlPath, mtime: mtime)
         snap.toolTokenEstimate = aggregates.toolTokens
+        snap.linesAdded = aggregates.linesAdded
+        snap.linesRemoved = aggregates.linesRemoved
         let finalTasks = aggregates.tasks
             .ifEmpty(else: {
                 // Fall back to whatever we found in the tail.
@@ -259,6 +261,10 @@ enum ClaudeSource {
         let tasks: [TaskItem]
         /// Estimated tokens per tool, summed across input + result bytes.
         let toolTokens: [String: Int]
+        /// Lines added across Edit/Write/MultiEdit (new_string + content payloads).
+        let linesAdded: Int
+        /// Lines removed across Edit/MultiEdit (old_string payloads).
+        let linesRemoved: Int
     }
     private struct FullSessionCacheEntry {
         let mtime: Date
@@ -283,7 +289,8 @@ enum ClaudeSource {
         }
         sessionCacheLock.unlock()
 
-        let empty = FullSessionAggregates(tasks: [], toolTokens: [:])
+        let empty = FullSessionAggregates(tasks: [], toolTokens: [:],
+                                          linesAdded: 0, linesRemoved: 0)
         guard let text = try? String(contentsOfFile: jsonlPath, encoding: .utf8) else {
             return empty
         }
@@ -296,6 +303,8 @@ enum ClaudeSource {
         var toolByUseID: [String: String] = [:]
         var inputBytes: [String: Int] = [:]
         var resultBytes: [String: Int] = [:]
+        var linesAdded = 0
+        var linesRemoved = 0
 
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let s = String(raw)
@@ -322,6 +331,25 @@ enum ClaudeSource {
                     if let useID = useID { toolByUseID[useID] = name }
                     if let bytes = try? JSONSerialization.data(withJSONObject: input, options: []) {
                         inputBytes[name, default: 0] += bytes.count
+                    }
+
+                    // Line accounting: count newlines in the patch payloads.
+                    // `Edit` and `MultiEdit` give us both old (removed) and
+                    // new (added); `Write` is treated as net-added.
+                    switch name {
+                    case "Edit":
+                        if let s = input["old_string"] as? String { linesRemoved += countLines(s) }
+                        if let s = input["new_string"] as? String { linesAdded   += countLines(s) }
+                    case "MultiEdit":
+                        if let edits = input["edits"] as? [[String: Any]] {
+                            for e in edits {
+                                if let s = e["old_string"] as? String { linesRemoved += countLines(s) }
+                                if let s = e["new_string"] as? String { linesAdded   += countLines(s) }
+                            }
+                        }
+                    case "Write":
+                        if let s = input["content"] as? String { linesAdded += countLines(s) }
+                    default: break
                     }
 
                     // Task tracking.
@@ -386,11 +414,23 @@ enum ClaudeSource {
             if bytes > 0 { toolTokens[name] = bytes / 4 }
         }
 
-        let aggregates = FullSessionAggregates(tasks: tasks, toolTokens: toolTokens)
+        let aggregates = FullSessionAggregates(tasks: tasks,
+                                               toolTokens: toolTokens,
+                                               linesAdded: linesAdded,
+                                               linesRemoved: linesRemoved)
         sessionCacheLock.lock()
         sessionCache[jsonlPath] = FullSessionCacheEntry(mtime: mtime, aggregates: aggregates)
         sessionCacheLock.unlock()
         return aggregates
+    }
+
+    /// Count the lines a string contributes. Empty → 0. Otherwise newlines + 1
+    /// (for the final line without a trailing newline).
+    private static func countLines(_ s: String) -> Int {
+        if s.isEmpty { return 0 }
+        var n = 0
+        for ch in s where ch == "\n" { n += 1 }
+        return n + 1
     }
 
     /// Pull the assigned task ID out of "Task #N created successfully: ..."

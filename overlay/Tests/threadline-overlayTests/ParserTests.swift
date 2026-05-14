@@ -48,6 +48,10 @@ final class ClaudeSourceTests: XCTestCase {
         XCTAssertEqual(SourceSnapshot.formatTokens(4_234),     "4.2K")
         XCTAssertEqual(SourceSnapshot.formatTokens(120_000),   "120K")
         XCTAssertEqual(SourceSnapshot.formatTokens(1_200_000), "1.2M")
+
+        // Edit's old_string had 3 lines, new_string had 5 lines.
+        XCTAssertEqual(snap.linesRemoved, 3)
+        XCTAssertEqual(snap.linesAdded,   5)
     }
 }
 

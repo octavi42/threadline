@@ -361,10 +361,22 @@ private struct FilesView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("FILES EDITED (\(snap.filesEdited.count))")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .tracking(0.5)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 10) {
+                    Text("FILES EDITED (\(snap.filesEdited.count))")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundColor(.secondary)
+                    if snap.linesAdded > 0 || snap.linesRemoved > 0 {
+                        HStack(spacing: 6) {
+                            Text("+\(snap.linesAdded)")
+                                .foregroundColor(Color(red: 0.30, green: 0.80, blue: 0.50))
+                            Text("−\(snap.linesRemoved)")
+                                .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.45))
+                        }
+                        .font(.system(size: 10, design: .monospaced))
+                    }
+                    Spacer()
+                }
                 if snap.filesEdited.isEmpty {
                     Text("None yet.")
                         .font(.system(size: 12))

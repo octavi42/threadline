@@ -40,6 +40,10 @@ struct SourceSnapshot: Identifiable, Equatable {
     var toolCallCounts: [String: Int] = [:]
     /// Estimated tokens consumed per tool (sum of input + result bytes / 4).
     var toolTokenEstimate: [String: Int] = [:]
+    /// Lines the agent has added across all Edit/Write/MultiEdit calls.
+    var linesAdded: Int = 0
+    /// Lines the agent has removed across Edit/MultiEdit `old_string` payloads.
+    var linesRemoved: Int = 0
     var userTurns: Int = 0
     var assistantTurns: Int = 0
     var sessionStart: Date?               // first record's timestamp
