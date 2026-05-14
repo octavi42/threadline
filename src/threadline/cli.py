@@ -11,6 +11,8 @@ from .cache import read_state, read_summary, write_cache
 from .collect import collect_context
 from .summarize import render_compact_summary, render_summary
 
+TOP_PANE_OPTION = "@threadline_top_pane"
+
 
 def build_and_cache_summary(compact: bool = False) -> str:
     context = collect_context()
@@ -75,7 +77,23 @@ def watch_command(interval: int, compact: bool) -> int:
         return 0
 
 
-def top_command(height: int, interval: int) -> int:
+def run_tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["tmux", *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def tmux_pane_exists(pane_id: str) -> bool:
+    if not pane_id:
+        return False
+    completed = run_tmux(["display-message", "-p", "-t", pane_id, "#{pane_id}"])
+    return completed.returncode == 0 and completed.stdout.strip() == pane_id
+
+
+def open_top_pane(height: int, interval: int) -> int:
     target_pane = os.environ.get("TMUX_PANE")
     if not target_pane:
         print("Threadline top must be run inside tmux.", file=sys.stderr)
@@ -85,15 +103,51 @@ def top_command(height: int, interval: int) -> int:
         f"THREADLINE_TARGET_PANE={target_pane} "
         f"threadline watch --compact --interval {interval}"
     )
-    completed = subprocess.run(
-        ["tmux", "split-window", "-v", "-b", "-l", str(height), "-d", command],
-        check=False,
+    completed = run_tmux(
+        [
+            "split-window",
+            "-v",
+            "-b",
+            "-l",
+            str(height),
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            command,
+        ]
     )
     if completed.returncode != 0:
+        print(completed.stderr.strip(), file=sys.stderr)
         return completed.returncode
 
+    top_pane = completed.stdout.strip()
+    run_tmux(["set-option", "-gq", TOP_PANE_OPTION, top_pane])
     print(f"Threadline top pane opened for {target_pane}.")
     return 0
+
+
+def close_top_pane() -> bool:
+    completed = run_tmux(["show-option", "-gqv", TOP_PANE_OPTION])
+    top_pane = completed.stdout.strip()
+    if not tmux_pane_exists(top_pane):
+        run_tmux(["set-option", "-guq", TOP_PANE_OPTION])
+        return False
+
+    run_tmux(["kill-pane", "-t", top_pane])
+    run_tmux(["set-option", "-guq", TOP_PANE_OPTION])
+    return True
+
+
+def top_command(height: int, interval: int) -> int:
+    close_top_pane()
+    return open_top_pane(height=height, interval=interval)
+
+
+def toggle_command(height: int, interval: int) -> int:
+    if close_top_pane():
+        return 0
+    return open_top_pane(height=height, interval=interval)
 
 
 def main() -> int:
@@ -150,6 +204,20 @@ def main() -> int:
         help="Refresh interval in seconds.",
     )
 
+    toggle_parser = subparsers.add_parser("toggle", help="Toggle the fixed Threadline top pane.")
+    toggle_parser.add_argument(
+        "--height",
+        type=int,
+        default=5,
+        help="Height of the fixed top pane.",
+    )
+    toggle_parser.add_argument(
+        "--interval",
+        type=int,
+        default=15,
+        help="Refresh interval in seconds.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "summarize":
@@ -160,6 +228,8 @@ def main() -> int:
         return watch_command(interval=args.interval, compact=args.compact)
     if args.command == "top":
         return top_command(height=args.height, interval=args.interval)
+    if args.command == "toggle":
+        return toggle_command(height=args.height, interval=args.interval)
 
     parser.error(f"unknown command: {args.command}")
     return 2

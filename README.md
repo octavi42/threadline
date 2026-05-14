@@ -8,6 +8,7 @@ The first target is a tmux-based workflow:
 threadline summarize
 threadline show
 threadline watch
+threadline toggle
 ```
 
 Planned flow:
@@ -37,15 +38,17 @@ From inside tmux:
 ```bash
 threadline show
 threadline top
+threadline toggle
 ```
 
 `show` waits for one key before closing when it is attached to a real terminal. Use `--no-wait` for scripts.
 `top` opens a fixed compact Threadline pane above the current pane.
+`toggle` opens the fixed top pane if hidden, or closes it if visible.
 
 Example tmux bindings:
 
 ```tmux
 bind-key t display-popup -E -w 70% -h 40% 'threadline show'
 bind-key T display-popup -E -w 70% -h 40% 'threadline summarize && threadline show'
-bind-key b run-shell 'threadline top'
+bind-key b run-shell 'threadline toggle'
 ```
