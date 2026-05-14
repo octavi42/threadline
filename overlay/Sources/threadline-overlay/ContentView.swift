@@ -167,14 +167,14 @@ private struct DetailsPane: View {
 private struct DetailHeader: View {
     let snap: SourceSnapshot
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                StateDot(state: snap.state).frame(width: 9, height: 9)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                StateDot(state: snap.state).frame(width: 10, height: 10)
                 Text(snap.tool)
-                    .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                Text("·").foregroundColor(.secondary)
+                    .font(.system(size: 20, weight: .semibold))
                 Text(snap.projectName)
-                    .font(.system(size: 17, design: .monospaced))
+                    .font(.system(size: 20, weight: .regular, design: .monospaced))
+                    .foregroundColor(.secondary)
                 Spacer()
                 Text(snap.timeAgoShort)
                     .font(.system(size: 11, design: .monospaced))
@@ -182,7 +182,7 @@ private struct DetailHeader: View {
             }
             Text(snap.displayCwd)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(Color.secondary.opacity(0.7))
         }
     }
 }
@@ -192,16 +192,16 @@ private struct DetailHeader: View {
 private struct OverviewView: View {
     let snap: SourceSnapshot
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             statsGrid
             if let task = snap.currentTask, !task.isEmpty {
-                section(label: "CURRENT TASK", text: task)
+                section(label: "Current task", text: task)
             }
             if let last = snap.lastTool, !last.isEmpty {
-                section(label: "LAST ACTION", text: last)
+                section(label: "Last action", text: last, mono: true)
             }
             if let lastText = snap.lastText, !lastText.isEmpty {
-                section(label: "LAST MESSAGE", text: lastText, mono: true)
+                section(label: "Last message", text: lastText)
             }
             Spacer(minLength: 0)
         }
@@ -213,22 +213,22 @@ private struct OverviewView: View {
             return b
         }()
         let burn = snap.costBurnPerMin.map { String(format: "$%.3f/min", $0) }
-        let block = snap.blockRemainingFormatted.map { "\($0) left in block" }
+        let block = snap.blockRemainingFormatted.map { "\($0) left" }
         let items: [(String, String?)] = [
-            ("model",       snap.model),
-            ("branch",      branchStr),
-            ("context",     snap.contextPercent.map { String(format: "%.0f%%", $0 * 100) }),
-            ("cost",        snap.costUSD.flatMap { $0 > 0 ? String(format: "$%.2f", $0) : nil }),
-            ("burn rate",   burn),
-            ("5h block",    block),
-            ("turns",       snap.userTurns + snap.assistantTurns > 0
-                            ? "\(snap.userTurns) user · \(snap.assistantTurns) asst" : nil),
+            ("model",        snap.model),
+            ("branch",       branchStr),
+            ("context",      snap.contextPercent.map { String(format: "%.0f%%", $0 * 100) }),
+            ("cost",         snap.costUSD.flatMap { $0 > 0 ? String(format: "$%.2f", $0) : nil }),
+            ("burn rate",    burn),
+            ("5h block",     block),
+            ("turns",        snap.userTurns + snap.assistantTurns > 0
+                             ? "\(snap.userTurns) user · \(snap.assistantTurns) asst" : nil),
             ("files edited", snap.filesEdited.isEmpty ? nil : "\(snap.filesEdited.count)"),
-            ("tasks",       snap.tasks.isEmpty ? nil :
-                            "\(snap.tasksDone)/\(snap.tasks.count) done"),
+            ("tasks",        snap.tasks.isEmpty ? nil :
+                             "\(snap.tasksDone)/\(snap.tasks.count) done"),
         ]
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
-                         spacing: 8) {
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3),
+                         alignment: .leading, spacing: 14) {
             ForEach(items.compactMap { p -> (String, String)? in
                 guard let v = p.1, !v.isEmpty else { return nil }
                 return (p.0, v)
@@ -238,21 +238,26 @@ private struct OverviewView: View {
         }
     }
     private func stat(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(label.uppercased())
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.5)
                 .foregroundColor(.secondary)
-            Text(value).font(.system(size: 12, design: .monospaced))
+            Text(value)
+                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                .foregroundColor(.primary)
         }
     }
     private func section(label: String, text: String, mono: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label.uppercased())
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.5)
                 .foregroundColor(.secondary)
             Text(text)
-                .font(.system(size: mono ? 11 : 12,
+                .font(.system(size: mono ? 12 : 13,
                               design: mono ? .monospaced : .default))
+                .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -263,53 +268,68 @@ private struct TasksView: View {
     let snap: SourceSnapshot
     var body: some View {
         if snap.tasks.isEmpty {
-            Text("no tasks tracked")
-                .font(.system(size: 11, design: .monospaced))
+            Text("No tasks tracked yet.")
+                .font(.system(size: 12))
                 .foregroundColor(.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 14) {
-                    counter("DONE",        snap.tasksDone,       .green)
-                    counter("IN PROGRESS", snap.tasksInProgress, .yellow)
-                    counter("PENDING",     snap.tasksPending,    .secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 18) {
+                    counter("done",        snap.tasksDone,       Color(red: 0.30, green: 0.80, blue: 0.50))
+                    counter("in progress", snap.tasksInProgress, Color(red: 1.0,  green: 0.78, blue: 0.10))
+                    counter("pending",     snap.tasksPending,    .secondary)
                 }
                 .padding(.bottom, 4)
-                ForEach(snap.tasks) { t in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(symbol(t.status))
-                            .foregroundColor(color(t.status))
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(width: 14, alignment: .leading)
-                        Text(t.content)
-                            .font(.system(size: 12, design: .default))
-                            .strikethrough(t.status == "completed", color: .secondary)
-                            .foregroundColor(t.status == "completed" ? .secondary : .primary)
-                            .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(snap.tasks) { t in
+                        TaskRow(task: t)
                     }
                 }
             }
         }
     }
-    private func symbol(_ s: String) -> String {
-        switch s {
-        case "completed":   return "[x]"
-        case "in_progress": return "[▶]"
-        default:            return "[ ]"
-        }
-    }
-    private func color(_ s: String) -> Color {
-        switch s {
-        case "completed":   return .green
-        case "in_progress": return .yellow
-        default:            return .secondary
-        }
-    }
     private func counter(_ label: String, _ n: Int, _ color: Color) -> some View {
-        HStack(spacing: 4) {
-            Text("\(n)").font(.system(size: 16, weight: .semibold, design: .monospaced))
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(n)")
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .foregroundColor(color)
-            Text(label).font(.system(size: 9, weight: .semibold, design: .monospaced))
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.5)
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+private struct TaskRow: View {
+    let task: TaskItem
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            // Single Unicode glyph — fits in any monospaced cell, no
+            // line-wrapping problems.
+            Text(glyph)
+                .font(.system(size: 13))
+                .foregroundColor(glyphColor)
+                .frame(width: 14, alignment: .center)
+            Text(task.content)
+                .font(.system(size: 13))
+                .foregroundColor(task.status == "completed" ? .secondary : .primary)
+                .strikethrough(task.status == "completed", color: .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+    private var glyph: String {
+        switch task.status {
+        case "completed":   return "●"
+        case "in_progress": return "◐"
+        default:            return "○"
+        }
+    }
+    private var glyphColor: Color {
+        switch task.status {
+        case "completed":   return Color(red: 0.30, green: 0.80, blue: 0.50)
+        case "in_progress": return Color(red: 1.0,  green: 0.78, blue: 0.10)
+        default:            return .secondary
         }
     }
 }
@@ -317,32 +337,38 @@ private struct TasksView: View {
 private struct FilesView: View {
     let snap: SourceSnapshot
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Top: tool call counts
+        VStack(alignment: .leading, spacing: 18) {
             if !snap.toolCallCounts.isEmpty {
-                Text("TOOL CALLS")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.secondary)
-                FlowChips(items: snap.toolCallCounts
-                    .sorted { $0.value > $1.value }
-                    .map { "\($0.key): \($0.value)" })
-                Divider().padding(.vertical, 4)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("TOOL CALLS")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundColor(.secondary)
+                    FlowChips(items: snap.toolCallCounts
+                        .sorted { $0.value > $1.value }
+                        .map { "\($0.key) · \($0.value)" })
+                }
             }
-            Text("FILES EDITED (\(snap.filesEdited.count))")
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(.secondary)
-            if snap.filesEdited.isEmpty {
-                Text("none yet")
-                    .font(.system(size: 11, design: .monospaced))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("FILES EDITED (\(snap.filesEdited.count))")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.5)
                     .foregroundColor(.secondary)
-            } else {
-                ForEach(snap.filesEdited, id: \.self) { path in
-                    Text((path as NSString).abbreviatingWithTildeInPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                if snap.filesEdited.isEmpty {
+                    Text("None yet.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(snap.filesEdited, id: \.self) { path in
+                            Text((path as NSString).abbreviatingWithTildeInPath)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
             }
         }
@@ -352,16 +378,15 @@ private struct FilesView: View {
 private struct FlowChips: View {
     let items: [String]
     var body: some View {
-        // Simple two-column wrap; works fine for our short chip strings.
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading),
-                                 count: 3), spacing: 4) {
+                                 count: 3), spacing: 5) {
             ForEach(items, id: \.self) { item in
                 Text(item)
-                    .font(.system(size: 10, design: .monospaced))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.secondary.opacity(0.15))
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.secondary.opacity(0.12))
                     )
                     .foregroundColor(.primary)
             }
@@ -374,18 +399,30 @@ private struct SummaryView: View {
     let snap: SourceSnapshot
     var body: some View {
         if let text = model.summaries[snap.id], !text.isEmpty {
-            Text(text)
-                .font(.system(size: 13, design: .default))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("SUMMARY")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.5)
+                    .foregroundColor(.secondary)
+                Text(text)
+                    .font(.system(size: 14))
+                    .lineSpacing(2)
+                    .foregroundColor(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Summarizing this session…")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.secondary)
-                Text("Uses your installed `claude` (-p, model: haiku) or `codex exec`, whichever is on PATH — no separate API key needed. Falls back to ANTHROPIC_API_KEY if both CLIs are missing.")
-                    .font(.system(size: 11, design: .default))
-                    .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Summarising this session…")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                Text("Uses your installed `claude -p` or `codex exec` — no separate API key needed. Falls back to ANTHROPIC_API_KEY if both CLIs are missing.")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color.secondary.opacity(0.8))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onAppear { model.requestSummaryForSelection() }

@@ -181,22 +181,28 @@ enum ClaudeSource {
         else if ageSec > 300                   { snap.state = .stale }
         else                                   { snap.state = .idle }
 
-        // Build the final task list. TaskCreate/TaskUpdate wins; if there
-        // are none, fall back to the legacy TodoWrite snapshot.
-        var finalTasks: [TaskItem] = []
-        if !creationOrder.isEmpty {
-            for id in creationOrder {
-                if let wip = taskByID[id], wip.status != "deleted" {
-                    finalTasks.append(TaskItem(content: wip.content, status: wip.status))
+        // The tail can lose TaskCreate records in long sessions (they may
+        // sit further back than the 128 KB window). Do a full-file scan for
+        // task records to reconstruct the canonical list; cached by mtime.
+        let finalTasks = scanAllTasks(jsonlPath: jsonlPath, mtime: mtime)
+            .ifEmpty(else: {
+                // Fall back to whatever we found in the tail.
+                var t: [TaskItem] = []
+                if !creationOrder.isEmpty {
+                    for id in creationOrder {
+                        if let wip = taskByID[id], wip.status != "deleted" {
+                            t.append(TaskItem(content: wip.content, status: wip.status))
+                        }
+                    }
+                } else if !todoWriteFallback.isEmpty {
+                    t = todoWriteFallback.compactMap { dict in
+                        guard let c = dict["content"] as? String,
+                              let s = dict["status"] as? String else { return nil }
+                        return TaskItem(content: c, status: s)
+                    }
                 }
-            }
-        } else if !todoWriteFallback.isEmpty {
-            finalTasks = todoWriteFallback.compactMap { dict in
-                guard let c = dict["content"] as? String,
-                      let s = dict["status"] as? String else { return nil }
-                return TaskItem(content: c, status: s)
-            }
-        }
+                return t
+            })
         if let active = finalTasks.first(where: { $0.status == "in_progress" }) {
             snap.currentTask = active.content
         }
@@ -246,6 +252,106 @@ enum ClaudeSource {
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
+    // MARK: - full-file task scan (with mtime cache)
+
+    private struct TaskCacheEntry {
+        let mtime: Date
+        let tasks: [TaskItem]
+    }
+    private static var taskCache: [String: TaskCacheEntry] = [:]
+    private static let taskCacheLock = NSLock()
+
+    /// Scan the entire JSONL for TaskCreate / TaskUpdate / TodoWrite records
+    /// and reconstruct the current task list. Cached by (path, mtime) so
+    /// consecutive refreshes that hit an unchanged file are free.
+    private static func scanAllTasks(jsonlPath: String, mtime: Date) -> [TaskItem] {
+        taskCacheLock.lock()
+        if let hit = taskCache[jsonlPath], hit.mtime == mtime {
+            taskCacheLock.unlock()
+            return hit.tasks
+        }
+        taskCacheLock.unlock()
+
+        guard let text = try? String(contentsOfFile: jsonlPath, encoding: .utf8) else {
+            return []
+        }
+        struct WIP { var content: String; var status: String }
+        var byID: [String: WIP] = [:]
+        var order: [String] = []
+        var pending: [String: String] = [:]
+        var todoWriteFallback: [[String: Any]] = []
+
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            // Fast filter: only parse JSON if the line might be relevant.
+            let s = String(raw)
+            let interesting = s.contains("\"TaskCreate\"")
+                           || s.contains("\"TaskUpdate\"")
+                           || s.contains("\"TodoWrite\"")
+                           || s.contains("\"tool_result\"")
+            guard interesting else { continue }
+            guard let data = s.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let msg = obj["message"] as? [String: Any],
+                  let content = msg["content"] as? [[String: Any]]
+            else { continue }
+
+            for block in content {
+                let type = block["type"] as? String
+                if type == "tool_use" {
+                    let name = block["name"] as? String
+                    let input = block["input"] as? [String: Any] ?? [:]
+                    let useID = block["id"] as? String
+                    switch name {
+                    case "TodoWrite":
+                        if let todos = input["todos"] as? [[String: Any]] {
+                            todoWriteFallback = todos
+                        }
+                    case "TaskCreate":
+                        if let useID = useID, let subject = input["subject"] as? String {
+                            pending[useID] = subject
+                        }
+                    case "TaskUpdate":
+                        if let taskID = input["taskId"] as? String, var wip = byID[taskID] {
+                            if let s = input["status"] as? String  { wip.status = s }
+                            if let s = input["subject"] as? String { wip.content = s }
+                            byID[taskID] = wip
+                        }
+                    default: break
+                    }
+                } else if type == "tool_result",
+                          let useID = block["tool_use_id"] as? String,
+                          let subject = pending[useID] {
+                    pending.removeValue(forKey: useID)
+                    let body = extractToolResultText(block["content"]) ?? ""
+                    if let id = parseTaskID(from: body) {
+                        byID[id] = WIP(content: subject, status: "pending")
+                        order.append(id)
+                    }
+                }
+            }
+        }
+
+        var out: [TaskItem] = []
+        if !order.isEmpty {
+            for id in order {
+                if let wip = byID[id], wip.status != "deleted" {
+                    out.append(TaskItem(content: wip.content, status: wip.status))
+                }
+            }
+        } else {
+            out = todoWriteFallback.compactMap { dict in
+                guard let c = dict["content"] as? String,
+                      let s = dict["status"] as? String else { return nil }
+                return TaskItem(content: c, status: s)
+            }
+        }
+
+        taskCacheLock.lock()
+        taskCache[jsonlPath] = TaskCacheEntry(mtime: mtime, tasks: out)
+        taskCacheLock.unlock()
+        return out
+    }
+
     /// Pull the assigned task ID out of "Task #N created successfully: ..."
     private static func parseTaskID(from body: String) -> String? {
         guard let hashRange = body.range(of: "Task #") else { return nil }
@@ -284,6 +390,13 @@ enum ClaudeSource {
             target = ""
         }
         return target.isEmpty ? tool : "\(tool) \(target)"
+    }
+}
+
+extension Array {
+    /// Returns self when non-empty, otherwise the value produced by `else`.
+    fileprivate func ifEmpty(else fallback: () -> [Element]) -> [Element] {
+        isEmpty ? fallback() : self
     }
 }
 
