@@ -38,7 +38,7 @@ private struct AgentsList: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("\(model.snapshots.count)")
+                Text("\(model.folders.count)/\(model.snapshots.count)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -58,14 +58,44 @@ private struct AgentsList: View {
                 List(selection: Binding(
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
-                        ForEach(model.snapshots) { snap in
-                            AgentRow(snap: snap, summary: model.summaries[snap.id])
-                                .tag(snap.id)
+                        ForEach(model.folders) { folder in
+                            Section {
+                                ForEach(folder.snapshots) { snap in
+                                    AgentRow(snap: snap, summary: model.summaries[snap.id])
+                                        .tag(snap.id)
+                                }
+                            } header: {
+                                FolderHeader(folder: folder)
+                            }
                         }
                 }
                 .listStyle(.sidebar)
             }
         }
+    }
+}
+
+private struct FolderHeader: View {
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(folder.name)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(folder.snapshots.count)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            Text(folder.displayCwd)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.top, 6)
     }
 }
 

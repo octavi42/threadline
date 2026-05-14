@@ -99,12 +99,15 @@ enum Daemon {
         case "refresh":
             model?.refresh(); return "ok"
         case "list":
-            let snaps = model?.snapshots ?? []
-            if snaps.isEmpty { return "(no open agents)" }
-            let lines = snaps.map { s -> String in
-                let state = s.state.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)
-                let cwd = s.cwd ?? "—"
-                return "\(s.badge) \(state) \(cwd)"
+            let folders = model?.folders ?? []
+            if folders.isEmpty { return "(no open agents)" }
+            let lines = folders.flatMap { folder -> [String] in
+                let header = "\(folder.name) (\(folder.snapshots.count)) \(folder.displayCwd)"
+                let rows = folder.snapshots.map { s -> String in
+                    let state = s.state.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)
+                    return "  \(s.badge) \(state) \(s.timeAgoShort)"
+                }
+                return [header] + rows
             }
             return lines.joined(separator: "\n")
         case "status":

@@ -124,8 +124,28 @@ struct SourceSnapshot: Identifiable, Equatable {
     }
 }
 
+struct SessionFolder: Identifiable, Equatable {
+    let cwd: String
+    var snapshots: [SourceSnapshot]
+
+    var id: String { cwd }
+
+    var name: String {
+        (cwd as NSString).lastPathComponent
+    }
+
+    var displayCwd: String {
+        (cwd as NSString).abbreviatingWithTildeInPath
+    }
+
+    var latestSnapshot: SourceSnapshot? {
+        snapshots.first
+    }
+}
+
 final class SessionModel: ObservableObject {
     @Published var snapshots: [SourceSnapshot] = []
+    @Published var folders: [SessionFolder] = []
     @Published var selectedID: String?
     /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
     /// Lands asynchronously when the Summarizer completes a fetch.
@@ -183,9 +203,11 @@ final class SessionModel: ObservableObject {
             return ad > bd
         }
         let firstID = all.first?.id
+        let folders = makeFolders(from: all)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.snapshots = all
+            self.folders = folders
             if self.selectedID == nil || !all.contains(where: { $0.id == self.selectedID }) {
                 self.selectedID = firstID
             }
@@ -198,6 +220,34 @@ final class SessionModel: ObservableObject {
                 self.kickoffSummary(for: snap)
             }
         }
+    }
+
+    private func makeFolders(from snapshots: [SourceSnapshot]) -> [SessionFolder] {
+        let grouped = Dictionary(grouping: snapshots) { snap in
+            normalizedCwd(snap.cwd)
+        }
+        return grouped.map { cwd, snaps in
+            SessionFolder(cwd: cwd, snapshots: snaps.sorted(by: snapshotSort))
+        }
+        .sorted { a, b in
+            snapshotSort(a.latestSnapshot, b.latestSnapshot)
+        }
+    }
+
+    private func normalizedCwd(_ cwd: String?) -> String {
+        guard let cwd = cwd, !cwd.isEmpty else { return "Unknown" }
+        return (cwd as NSString).standardizingPath
+    }
+
+    private func snapshotSort(_ a: SourceSnapshot?, _ b: SourceSnapshot?) -> Bool {
+        guard let a = a else { return false }
+        guard let b = b else { return true }
+        let ad = a.updatedAt ?? .distantPast
+        let bd = b.updatedAt ?? .distantPast
+        if abs(ad.timeIntervalSince(bd)) < 1 {
+            return rank(a.state) < rank(b.state)
+        }
+        return ad > bd
     }
 
     private func kickoffSummary(for snap: SourceSnapshot) {
