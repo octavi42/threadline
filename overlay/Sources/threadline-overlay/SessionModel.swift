@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Combine
-import SwiftUI
 
 enum SourceState: String, Equatable {
     case running    // assistant turn in progress
@@ -13,46 +12,54 @@ enum SourceState: String, Equatable {
 }
 
 struct SourceSnapshot: Identifiable, Equatable {
-    let id: String              // tool name, used as identifier
-    let tool: String            // "Claude", "Codex", "Cursor"
-    let badge: String           // "CLD" | "CDX" | "CUR"
-    var state: SourceState = .none
+    let id: String              // "claude:/Users/foo/proj" — unique per session
+    let tool: String            // "Claude" | "Codex" | "Cursor"
+    let badge: String           // "CLD"   | "CDX"   | "CUR"
+    var state: SourceState = .idle
     var cwd: String?
     var model: String?
-    var currentTask: String?    // active TODO item, if any
-    var lastTool: String?       // "Edit Panel.swift"
-    var lastText: String?       // fallback when there's no task/tool
+    var currentTask: String?
+    var lastTool: String?
+    var lastText: String?
     var branch: String?
-    var dirtyCount: Int?        // git status --porcelain count
-    var contextPercent: Double? // 0.0…1.0
+    var dirtyCount: Int?
+    var contextPercent: Double?
     var costUSD: Double?
     var updatedAt: Date?
-    var note: String?           // "no session" / "error: …" surfaced inline
+    var note: String?
 
-    /// The most informative single-line label to show on the activity row.
-    var activityLine: String {
-        if let task = currentTask, !task.isEmpty { return task }
-        if let tool = lastTool, !tool.isEmpty { return tool }
-        if let text = lastText, !text.isEmpty {
-            return text.replacingOccurrences(of: "\n", with: " ")
-        }
-        if let note = note { return note }
-        return "—"
+    var projectName: String {
+        guard let cwd = cwd, !cwd.isEmpty else { return "—" }
+        return (cwd as NSString).lastPathComponent
     }
 
-    /// Right-side metadata strip, middle-dot separated.
+    var displayCwd: String {
+        guard let cwd = cwd else { return "—" }
+        return (cwd as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// Single-line summary for the agents list row.
+    var activityLine: String {
+        if let task = currentTask, !task.isEmpty { return task }
+        if let t = lastTool, !t.isEmpty { return t }
+        if let txt = lastText, !txt.isEmpty {
+            return txt.replacingOccurrences(of: "\n", with: " ")
+        }
+        return note ?? "—"
+    }
+
+    /// Right-side compact metrics for the details pane.
     var metricsLine: String {
         var parts: [String] = []
         if let m = model           { parts.append(shortModel(m)) }
         if let b = branch {
             parts.append(dirtyCount.map { $0 > 0 ? "\(b)+\($0)" : b } ?? b)
         }
-        if let p = contextPercent  { parts.append(String(format: "%.0f%%", p * 100)) }
+        if let p = contextPercent  { parts.append(String(format: "%.0f%% ctx", p * 100)) }
         if let c = costUSD, c > 0  { parts.append(String(format: "$%.2f", c)) }
         return parts.joined(separator: " · ")
     }
 
-    /// Trailing short time-since-update marker.
     var timeAgoShort: String {
         guard let t = updatedAt else { return "—" }
         let s = Int(-t.timeIntervalSinceNow)
@@ -64,7 +71,6 @@ struct SourceSnapshot: Identifiable, Equatable {
     }
 
     private func shortModel(_ m: String) -> String {
-        // "claude-opus-4-7" → "opus-4-7", "gpt-5-turbo" → "gpt-5"
         let lower = m.lowercased()
         if let r = lower.range(of: "claude-") { return String(lower[r.upperBound...]) }
         if let r = lower.range(of: "anthropic/") { return String(lower[r.upperBound...]) }
@@ -74,16 +80,11 @@ struct SourceSnapshot: Identifiable, Equatable {
 
 final class SessionModel: ObservableObject {
     @Published var snapshots: [SourceSnapshot] = []
-    /// Background NSColor matching the currently anchored terminal.
-    @Published var themeBackground: NSColor = TerminalTheme.fallback
-    /// Whether the theme background is dark — drives text contrast in the view.
-    @Published var themeIsDark: Bool = true
-    /// Active scope cwd resolved from ShellRegistry; nil = global.
-    @Published var scopeCwd: String?
-    /// Tool currently foregrounded in the scope shell's TTY (Claude/Codex);
-    /// nil when only a shell is foregrounded.
-    @Published var activeTool: String?
+    @Published var selectedID: String?
     private var timer: Timer?
+
+    /// Treat anything modified within this window as "active enough to surface".
+    let activeWindow: TimeInterval = 7 * 24 * 3600
 
     func start() {
         refresh()
@@ -93,75 +94,43 @@ final class SessionModel: ObservableObject {
     }
 
     func refresh() {
-        let scope = scopeCwd
-        let claude = ClaudeSource.read(scopeCwd: scope)
-        let codex = CodexSource.read(scopeCwd: scope)
-        let cursor = CursorSource.read(scopeCwd: scope)
-        let next = [claude, codex, cursor]
-        DispatchQueue.main.async { [weak self] in
-            self?.snapshots = next
-        }
-    }
-
-    /// Called by the controller each tick with the frontmost terminal PID.
-    /// Resolves both the scope cwd AND the foregrounded tool in that tab.
-    /// Falls back to passive discovery when the shell hook hasn't yet pinged.
-    func setScope(terminalPid: pid_t?) {
-        guard let pid = terminalPid else {
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                if self.scopeCwd != nil { self.scopeCwd = nil; self.refresh() }
-                self.activeTool = nil
+        let cutoff = Date().addingTimeInterval(-activeWindow)
+        var all: [SourceSnapshot] = []
+        all.append(contentsOf: ClaudeSource.readAll(since: cutoff))
+        all.append(contentsOf: CodexSource.readAll(since: cutoff))
+        all.append(contentsOf: CursorSource.readAll(since: cutoff))
+        // Most recently active first; running > others within the same time bucket.
+        all.sort { a, b in
+            let ad = a.updatedAt ?? .distantPast
+            let bd = b.updatedAt ?? .distantPast
+            if abs(ad.timeIntervalSince(bd)) < 1 {
+                return rank(a.state) < rank(b.state)
             }
-            return
+            return ad > bd
         }
-
-        var nextCwd: String?
-        var nextTool: String?
-
-        if let scope = ShellRegistry.shared.scope(terminalPid: pid) {
-            nextCwd = scope.cwd
-            nextTool = ForegroundProcess.toolName(shellPid: scope.shellPid)
-        }
-
-        // If touch didn't tell us what tool is active, scan descendant shells
-        // for a foregrounded AI tool. Cwd from registry still wins; tool from
-        // discovery fills in when only the cwd was touched.
-        if nextTool == nil {
-            let matches = ShellDiscovery.activeMatches(under: pid)
-            if let m = matches.first {
-                nextTool = m.activeTool
-                if nextCwd == nil { nextCwd = m.cwd }
-            }
-        }
-
+        let firstID = all.first?.id
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            var cwdChanged = false
-            if self.scopeCwd != nextCwd { self.scopeCwd = nextCwd; cwdChanged = true }
-            if self.activeTool != nextTool { self.activeTool = nextTool }
-            if cwdChanged { self.refresh() }
+            self.snapshots = all
+            // Keep selection if it still exists; otherwise default to the top row.
+            if let sel = self.selectedID, all.contains(where: { $0.id == sel }) { return }
+            self.selectedID = firstID
         }
     }
 
-    /// Called by the controller whenever the anchor changes. Resolves the
-    /// terminal's background color from its config and publishes it.
-    func setAnchor(bundleID: String?) {
-        let color = bundleID.map(TerminalTheme.backgroundColor(for:)) ?? TerminalTheme.fallback
-        let dark = isDark(color)
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            if self.themeBackground != color { self.themeBackground = color }
-            if self.themeIsDark != dark      { self.themeIsDark = dark }
+    private func rank(_ s: SourceState) -> Int {
+        switch s {
+        case .running:  return 0
+        case .awaiting: return 1
+        case .idle:     return 2
+        case .error:    return 3
+        case .stale:    return 4
+        case .none:     return 5
         }
     }
 
-    private func isDark(_ c: NSColor) -> Bool {
-        guard let srgb = c.usingColorSpace(.sRGB) else { return true }
-        // Rec. 709 luminance.
-        let lum = 0.2126 * srgb.redComponent
-                + 0.7152 * srgb.greenComponent
-                + 0.0722 * srgb.blueComponent
-        return lum < 0.5
+    var selectedSnapshot: SourceSnapshot? {
+        guard let id = selectedID else { return nil }
+        return snapshots.first { $0.id == id }
     }
 }

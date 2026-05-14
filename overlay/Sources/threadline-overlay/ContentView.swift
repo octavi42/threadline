@@ -3,130 +3,87 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var model: SessionModel
 
-    // MARK: theme-derived colors
-
-    private var primaryText: Color {
-        model.themeIsDark ? Color(white: 0.97) : Color(white: 0.10)
-    }
-    private var secondaryText: Color {
-        model.themeIsDark ? Color(white: 0.58) : Color(white: 0.40)
-    }
-    private var dividerColor: Color {
-        model.themeIsDark ? Color(white: 0.18) : Color(white: 0.82)
-    }
-
-    /// When an AI tool is foregrounded in the focused tab, show only that
-    /// tool's row. Otherwise (just a shell prompt), show all sources.
-    private var visibleSnapshots: [SourceSnapshot] {
-        guard let tool = model.activeTool else { return model.snapshots }
-        return model.snapshots.filter { $0.tool == tool }
-    }
-
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            Color(nsColor: model.themeBackground).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 4) {
-                header
-                Rectangle().fill(dividerColor).frame(height: 1)
-                ForEach(visibleSnapshots) { snap in
-                    SourceRow(snap: snap,
-                              primary: primaryText,
-                              secondary: secondaryText)
-                }
-                if visibleSnapshots.isEmpty {
-                    Text("no sources detected")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(secondaryText)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+        HSplitView {
+            AgentsList(model: model)
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
+            DetailsPane(snapshot: model.selectedSnapshot)
+                .frame(minWidth: 320)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var header: some View {
-        let totals = aggregate(model.snapshots)
-        let scopeText: String? = model.scopeCwd.map {
-            ($0 as NSString).abbreviatingWithTildeInPath
-        }
-        return HStack(spacing: 10) {
-            Text("threadline")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(secondaryText)
-            if let scope = scopeText {
-                Text("· \(scope)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-            Spacer()
-            HStack(spacing: 10) {
-                if totals.active > 0 {
-                    HStack(spacing: 4) {
-                        StateDot(state: .running).frame(width: 6, height: 6)
-                        Text("\(totals.active) active")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(secondaryText)
-                    }
-                }
-                if let cost = totals.cost {
-                    Text(String(format: "$%.2f", cost))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(secondaryText)
-                }
-                if let ctx = totals.avgContext {
-                    Text(String(format: "%.0f%% ctx", ctx * 100))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(secondaryText)
-                }
-                Text(Date(), style: .time)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(secondaryText)
-            }
-        }
-    }
-
-    private func aggregate(_ ss: [SourceSnapshot]) -> (active: Int, cost: Double?, avgContext: Double?) {
-        let active = ss.filter { $0.state == .running || $0.state == .awaiting }.count
-        let costs = ss.compactMap { $0.costUSD }
-        let cost: Double? = costs.isEmpty ? nil : costs.reduce(0, +)
-        let ctxs  = ss.compactMap { $0.contextPercent }
-        let avg:  Double? = ctxs.isEmpty ? nil : ctxs.reduce(0, +) / Double(ctxs.count)
-        return (active, cost, avg)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - SourceRow
+// MARK: - left sidebar
 
-private struct SourceRow: View {
+private struct AgentsList: View {
+    @ObservedObject var model: SessionModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("AGENTS")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(model.snapshots.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            Divider()
+            if model.snapshots.isEmpty {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Text("no recent agents")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Text("sessions from the last 7 days show here")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(Color.secondary.opacity(0.6))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                List(selection: Binding(
+                    get: { model.selectedID },
+                    set: { model.selectedID = $0 })) {
+                        ForEach(model.snapshots) { snap in
+                            AgentRow(snap: snap)
+                                .tag(snap.id)
+                        }
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+}
+
+private struct AgentRow: View {
     let snap: SourceSnapshot
-    let primary: Color
-    let secondary: Color
 
     var body: some View {
         HStack(spacing: 8) {
-            StateDot(state: snap.state).frame(width: 8, height: 8)
+            StateDot(state: snap.state).frame(width: 7, height: 7)
             BadgeView(label: snap.badge, color: badgeColor(snap.tool))
-                .frame(width: 38, alignment: .leading)
-            Text(snap.activityLine)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(snap.state == .stale ? secondary : primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(snap.metricsLine)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(secondary)
-                .lineLimit(1)
-                .layoutPriority(0.5)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(snap.projectName)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(snap.activityLine)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 4)
             Text(snap.timeAgoShort)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(secondary)
-                .frame(minWidth: 28, alignment: .trailing)
+                .foregroundColor(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     private func badgeColor(_ tool: String) -> Color {
@@ -139,21 +96,128 @@ private struct SourceRow: View {
     }
 }
 
-// MARK: - dot + badge primitives
+// MARK: - right details
 
-private struct StateDot: View {
+private struct DetailsPane: View {
+    let snapshot: SourceSnapshot?
+
+    var body: some View {
+        if let s = snapshot {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    header(s)
+                    Divider()
+                    statsGrid(s)
+                    if let task = s.currentTask, !task.isEmpty {
+                        section(label: "CURRENT TASK", text: task)
+                    }
+                    if let tool = s.lastTool, !tool.isEmpty {
+                        section(label: "LAST ACTION", text: tool)
+                    }
+                    if let last = s.lastText, !last.isEmpty {
+                        section(label: "LAST MESSAGE", text: last, mono: true)
+                    }
+                    if let note = s.note, !note.isEmpty {
+                        section(label: "NOTE", text: note)
+                    }
+                    Spacer(minLength: 16)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
+            VStack {
+                Spacer()
+                Text("select an agent")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func header(_ s: SourceSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                StateDot(state: s.state).frame(width: 9, height: 9)
+                Text(s.tool)
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                Text("·")
+                    .foregroundColor(.secondary)
+                Text(s.projectName)
+                    .font(.system(size: 18, design: .monospaced))
+                Spacer()
+                Text(s.timeAgoShort)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            Text(s.displayCwd)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func statsGrid(_ s: SourceSnapshot) -> some View {
+        let branchStr: String? = {
+            guard let b = s.branch else { return nil }
+            if let d = s.dirtyCount, d > 0 { return "\(b)+\(d)" }
+            return b
+        }()
+        let items: [(String, String?)] = [
+            ("model",    s.model),
+            ("branch",   branchStr),
+            ("context",  s.contextPercent.map { String(format: "%.0f%%", $0 * 100) }),
+            ("cost",     s.costUSD.flatMap { $0 > 0 ? String(format: "$%.2f", $0) : nil }),
+            ("state",    s.state == .none ? nil : s.state.rawValue),
+        ]
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
+                         spacing: 8) {
+            ForEach(items.compactMap { pair -> (String, String)? in
+                guard let v = pair.1, !v.isEmpty else { return nil }
+                return (pair.0, v)
+            }, id: \.0) { (label, value) in
+                stat(label: label, value: value)
+            }
+        }
+    }
+
+    private func stat(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+        }
+    }
+
+    private func section(label: String, text: String, mono: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+            Text(text)
+                .font(.system(size: mono ? 11 : 12, design: mono ? .monospaced : .default))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - shared primitives
+
+struct StateDot: View {
     let state: SourceState
     var body: some View {
-        Circle()
-            .fill(fill)
-            .overlay(strokeOverlay)
+        Circle().fill(fill).overlay(strokeOverlay)
     }
     private var fill: Color {
         switch state {
-        case .running:  return Color(red: 1.0, green: 0.78, blue: 0.10)     // yellow
-        case .awaiting: return Color(red: 1.0, green: 0.50, blue: 0.10)     // orange
-        case .idle:     return Color(red: 0.30, green: 0.85, blue: 0.45)    // green
-        case .error:    return Color(red: 1.0, green: 0.30, blue: 0.30)     // red
+        case .running:  return Color(red: 1.0, green: 0.78, blue: 0.10)
+        case .awaiting: return Color(red: 1.0, green: 0.50, blue: 0.10)
+        case .idle:     return Color(red: 0.30, green: 0.85, blue: 0.45)
+        case .error:    return Color(red: 1.0, green: 0.30, blue: 0.30)
         case .stale:    return Color(white: 0.35)
         case .none:     return .clear
         }
@@ -163,7 +227,7 @@ private struct StateDot: View {
     }
 }
 
-private struct BadgeView: View {
+struct BadgeView: View {
     let label: String
     let color: Color
     var body: some View {

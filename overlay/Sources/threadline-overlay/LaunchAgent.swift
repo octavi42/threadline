@@ -47,6 +47,10 @@ enum LaunchAgent {
             do {
                 try FileManager.default.copyItem(atPath: current, toPath: target)
                 _ = chmod(target, 0o755)
+                // macOS Sequoia+ rejects ad-hoc signed binaries after `cp`
+                // because the signature is tied to the originating inode.
+                // Re-sign the copy so AppleSystemPolicy allows it to launch.
+                resignAdHoc(at: target)
             } catch {
                 FileHandle.standardError.write(Data("failed to copy binary to \(target): \(error)\n".utf8))
             }
@@ -102,6 +106,16 @@ enum LaunchAgent {
             print("removed shell hook from: \(removedFrom.joined(separator: ", "))")
         }
         print("uninstalled")
+    }
+
+    private static func resignAdHoc(at path: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        p.arguments = ["--force", "--sign", "-", path]
+        p.standardOutput = FileHandle(forWritingAtPath: "/dev/null")
+        p.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        do { try p.run() } catch { return }
+        p.waitUntilExit()
     }
 
     @discardableResult

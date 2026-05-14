@@ -1,32 +1,26 @@
 import Foundation
 
-/// Cursor stores its chats across a workspace-keyed SQLite DB (state.vscdb) and a
-/// global cursorDiskKV with bubble/composer rows. Parsing those into a usable
-/// "last message" requires traversing internal references; v0 keeps it light:
-/// we surface the most recently active workspace folder and when it was touched.
+/// One snapshot per Cursor workspace whose `state.vscdb` is newer than `since`.
 enum CursorSource {
     private static var basePath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Application Support/Cursor/User/workspaceStorage"
     }
 
-    static func read(scopeCwd: String? = nil) -> SourceSnapshot {
-        var snap = SourceSnapshot(id: "cursor", tool: "Cursor", badge: "CUR")
+    static func readAll(since cutoff: Date) -> [SourceSnapshot] {
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: basePath) else {
-            snap.state = .none; snap.note = "no session"
-            return snap
-        }
+        guard let entries = try? fm.contentsOfDirectory(atPath: basePath) else { return [] }
 
-        struct Candidate { let dir: String; let mtime: Date; let folder: String? }
-        var all: [Candidate] = []
-        for e in entries {
-            let db = (basePath as NSString)
-                .appendingPathComponent(e)
+        var out: [SourceSnapshot] = []
+        for entry in entries {
+            let dbPath = (basePath as NSString)
+                .appendingPathComponent(entry)
                 .appending("/state.vscdb")
-            guard let m = (try? fm.attributesOfItem(atPath: db))?[.modificationDate] as? Date else { continue }
+            guard let m = (try? fm.attributesOfItem(atPath: dbPath))?[.modificationDate] as? Date,
+                  m >= cutoff
+            else { continue }
             let wsJson = (basePath as NSString)
-                .appendingPathComponent(e)
+                .appendingPathComponent(entry)
                 .appending("/workspace.json")
             var folder: String?
             if let data = try? Data(contentsOf: URL(fileURLWithPath: wsJson)),
@@ -35,35 +29,19 @@ enum CursorSource {
                 folder = raw.replacingOccurrences(of: "file://", with: "")
                             .removingPercentEncoding ?? raw
             }
-            all.append(Candidate(dir: e, mtime: m, folder: folder))
+            let id = "cursor:\(folder ?? entry)"
+            var snap = SourceSnapshot(id: id, tool: "Cursor", badge: "CUR")
+            snap.cwd = folder
+            snap.updatedAt = m
+            snap.lastText = "workspace active"
+            let ageSec = -m.timeIntervalSinceNow
+            snap.state = ageSec > 300 ? .stale : .idle
+            if let c = folder, let info = Git.info(cwd: c) {
+                snap.branch = info.branch
+                snap.dirtyCount = info.dirty
+            }
+            out.append(snap)
         }
-        all.sort { $0.mtime > $1.mtime }
-
-        // Scoped pick first, fall back to global newest.
-        let pick: Candidate?
-        if let scope = scopeCwd, !scope.isEmpty {
-            pick = all.first { c in
-                guard let f = c.folder else { return false }
-                return f == scope || f.hasPrefix(scope + "/") || scope.hasPrefix(f + "/")
-            } ?? all.first
-        } else {
-            pick = all.first
-        }
-        guard let chosen = pick else {
-            snap.state = .none; snap.note = "no session"
-            return snap
-        }
-        snap.updatedAt = chosen.mtime
-        snap.cwd = chosen.folder
-        snap.lastText = "workspace active"
-
-        let ageSec = -chosen.mtime.timeIntervalSinceNow
-        snap.state = ageSec > 300 ? .stale : .idle
-
-        if let c = snap.cwd, let info = Git.info(cwd: c) {
-            snap.branch = info.branch
-            snap.dirtyCount = info.dirty
-        }
-        return snap
+        return out
     }
 }
