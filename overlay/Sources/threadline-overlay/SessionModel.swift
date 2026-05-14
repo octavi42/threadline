@@ -80,6 +80,9 @@ final class SessionModel: ObservableObject {
     @Published var themeIsDark: Bool = true
     /// Active scope cwd resolved from ShellRegistry; nil = global.
     @Published var scopeCwd: String?
+    /// Tool currently foregrounded in the scope shell's TTY (Claude/Codex);
+    /// nil when only a shell is foregrounded.
+    @Published var activeTool: String?
     private var timer: Timer?
 
     func start() {
@@ -101,17 +104,43 @@ final class SessionModel: ObservableObject {
     }
 
     /// Called by the controller each tick with the frontmost terminal PID.
-    /// Resolves the scope cwd via ShellRegistry (or clears it for non-targets).
+    /// Resolves both the scope cwd AND the foregrounded tool in that tab.
+    /// Falls back to passive discovery when the shell hook hasn't yet pinged.
     func setScope(terminalPid: pid_t?) {
-        let next: String? = terminalPid.flatMap { ShellRegistry.shared.scopeCwd(terminalPid: $0) }
+        guard let pid = terminalPid else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if self.scopeCwd != nil { self.scopeCwd = nil; self.refresh() }
+                self.activeTool = nil
+            }
+            return
+        }
+
+        var nextCwd: String?
+        var nextTool: String?
+
+        if let scope = ShellRegistry.shared.scope(terminalPid: pid) {
+            nextCwd = scope.cwd
+            nextTool = ForegroundProcess.toolName(shellPid: scope.shellPid)
+        }
+
+        // If touch didn't tell us what tool is active, scan descendant shells
+        // for a foregrounded AI tool. Cwd from registry still wins; tool from
+        // discovery fills in when only the cwd was touched.
+        if nextTool == nil {
+            let matches = ShellDiscovery.activeMatches(under: pid)
+            if let m = matches.first {
+                nextTool = m.activeTool
+                if nextCwd == nil { nextCwd = m.cwd }
+            }
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if self.scopeCwd != next {
-                self.scopeCwd = next
-                // Re-read with the new scope immediately so the panel updates
-                // without waiting for the 3s poll.
-                self.refresh()
-            }
+            var cwdChanged = false
+            if self.scopeCwd != nextCwd { self.scopeCwd = nextCwd; cwdChanged = true }
+            if self.activeTool != nextTool { self.activeTool = nextTool }
+            if cwdChanged { self.refresh() }
         }
     }
 

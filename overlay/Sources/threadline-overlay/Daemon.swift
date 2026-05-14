@@ -97,9 +97,25 @@ enum Daemon {
             let f = c.panel.frame
             let target = WindowFinder.frontmostTarget()
             let anchorPid = target.map { "\($0.appName)(pid=\($0.pid))" } ?? "no-anchor"
-            let scope = target.flatMap { ShellRegistry.shared.scopeCwd(terminalPid: $0.pid) } ?? "—"
+            // Mirror SessionModel.setScope: registry first, then passive discovery.
+            var scope = "—"
+            var tool = "—"
+            if let t = target {
+                if let s = ShellRegistry.shared.scope(terminalPid: t.pid) {
+                    scope = s.cwd
+                    if let detected = ForegroundProcess.toolName(shellPid: s.shellPid) {
+                        tool = detected
+                    }
+                }
+                if tool == "—" {
+                    if let m = ShellDiscovery.activeMatches(under: t.pid).first {
+                        tool = m.activeTool
+                        if scope == "—" { scope = m.cwd }
+                    }
+                }
+            }
             let reg = ShellRegistry.shared.count()
-            return "running pid=\(getpid()) visible=\(c.panel.isVisible) panel=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) anchor=\(anchorPid) scope=\(scope) shells=\(reg)"
+            return "running pid=\(getpid()) visible=\(c.panel.isVisible) panel=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) anchor=\(anchorPid) scope=\(scope) tool=\(tool) shells=\(reg)"
         case "quit":
             DispatchQueue.main.async {
                 NSApp.terminate(nil)

@@ -26,18 +26,28 @@ final class ShellRegistry {
         prune()
     }
 
-    /// The cwd of the most recently-active shell whose process tree leads up
-    /// to `terminalPid`. Returns nil if no live touch matches.
-    func scopeCwd(terminalPid: pid_t) -> String? {
+    struct Scope {
+        let shellPid: pid_t
+        let cwd: String
+    }
+
+    /// The most recently-active shell descended from `terminalPid`.
+    /// Returns nil if no live touch matches.
+    func scope(terminalPid: pid_t) -> Scope? {
         lock.lock(); defer { lock.unlock() }
         prune()
         let sorted = entries.values.sorted { $0.touchedAt > $1.touchedAt }
         for entry in sorted {
             if isDescendant(pid: entry.pid, ancestor: terminalPid) {
-                return entry.cwd
+                return Scope(shellPid: entry.pid, cwd: entry.cwd)
             }
         }
         return nil
+    }
+
+    /// Compatibility shortcut: cwd only.
+    func scopeCwd(terminalPid: pid_t) -> String? {
+        scope(terminalPid: terminalPid)?.cwd
     }
 
     func count() -> Int {
@@ -51,6 +61,11 @@ final class ShellRegistry {
     }
 
     // MARK: - process tree walk
+
+    /// Public ancestry probe so `ShellDiscovery` can reuse the same logic.
+    func isDescendantOf(pid: pid_t, ancestor: pid_t) -> Bool {
+        isDescendant(pid: pid, ancestor: ancestor)
+    }
 
     private func isDescendant(pid: pid_t, ancestor: pid_t) -> Bool {
         if pid == ancestor { return true }

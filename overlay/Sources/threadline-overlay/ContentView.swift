@@ -15,18 +15,25 @@ struct ContentView: View {
         model.themeIsDark ? Color(white: 0.18) : Color(white: 0.82)
     }
 
+    /// When an AI tool is foregrounded in the focused tab, show only that
+    /// tool's row. Otherwise (just a shell prompt), show all sources.
+    private var visibleSnapshots: [SourceSnapshot] {
+        guard let tool = model.activeTool else { return model.snapshots }
+        return model.snapshots.filter { $0.tool == tool }
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color(nsColor: model.themeBackground).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 4) {
                 header
                 Rectangle().fill(dividerColor).frame(height: 1)
-                ForEach(model.snapshots) { snap in
+                ForEach(visibleSnapshots) { snap in
                     SourceRow(snap: snap,
                               primary: primaryText,
                               secondary: secondaryText)
                 }
-                if model.snapshots.isEmpty {
+                if visibleSnapshots.isEmpty {
                     Text("no sources detected")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(secondaryText)
