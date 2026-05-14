@@ -27,7 +27,12 @@ final class Summarizer {
     private var memory: [String: CacheEntry] = [:]
     private var inflight: Set<String> = []
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "threadline.summarizer", qos: .utility)
+    /// Concurrent so multiple sessions can summarise in parallel.
+    private let queue = DispatchQueue(label: "threadline.summarizer",
+                                      qos: .utility,
+                                      attributes: .concurrent)
+    /// Cap how many `claude -p` / `codex exec` processes run at once.
+    private let processSemaphore = DispatchSemaphore(value: 2)
 
     private static let summaryPrompt =
         "Summarize this coding-assistant session in 1–2 short sentences. " +
@@ -67,6 +72,8 @@ final class Summarizer {
 
         queue.async { [weak self] in
             guard let self = self else { return }
+            self.processSemaphore.wait()
+            defer { self.processSemaphore.signal() }
             let text = self.fetchAndCache(path: path, mtime: mtime)
             self.lock.lock()
             self.inflight.remove(path)
@@ -82,9 +89,16 @@ final class Summarizer {
 
     private func fetchAndCache(path: String, mtime: Date) -> String? {
         guard let content = buildPrompt(from: path) else { return nil }
-        let summary = runClaudeCLI(content: content)
-                   ?? runCodexCLI(content: content)
-                   ?? runAnthropicAPI(content: content)
+
+        // Pull the prior summary (any mtime) so the prompt can evolve it
+        // instead of starting fresh from the sliding window.
+        lock.lock()
+        let previous = memory[path]?.text ?? loadDisk(path: path)?.text
+        lock.unlock()
+
+        let summary = runClaudeCLI(content: content, previous: previous)
+                   ?? runCodexCLI(content: content, previous: previous)
+                   ?? runAnthropicAPI(content: content, previous: previous)
         guard let text = summary, !text.isEmpty else { return nil }
         let entry = CacheEntry(mtime: mtime, text: text)
         lock.lock()
@@ -94,12 +108,23 @@ final class Summarizer {
         return text
     }
 
+    private func promptWithContinuity(previous: String?) -> String {
+        guard let prev = previous?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prev.isEmpty else {
+            return Summarizer.summaryPrompt
+        }
+        return Summarizer.summaryPrompt
+            + "\n\nThe previous summary was: \"\(prev)\". "
+            + "Evolve it to reflect the latest activity below — keep what's still true, update what changed. "
+            + "If nothing meaningful changed, return the previous summary unchanged."
+    }
+
     // MARK: - claude -p
 
-    private func runClaudeCLI(content: String) -> String? {
+    private func runClaudeCLI(content: String, previous: String?) -> String? {
         guard let exe = which("claude") else { return nil }
         let args = [
-            "-p", Summarizer.summaryPrompt,
+            "-p", promptWithContinuity(previous: previous),
             "--model", "haiku",
             "--output-format", "text",
             "--no-session-persistence",
@@ -109,16 +134,15 @@ final class Summarizer {
 
     // MARK: - codex exec
 
-    private func runCodexCLI(content: String) -> String? {
+    private func runCodexCLI(content: String, previous: String?) -> String? {
         guard let exe = which("codex") else { return nil }
-        // codex exec runs non-interactively; pipe the conversation via stdin.
-        let args = ["exec", Summarizer.summaryPrompt]
+        let args = ["exec", promptWithContinuity(previous: previous)]
         return runProcess(exe: exe, args: args, stdin: content, timeout: 30)
     }
 
     // MARK: - Anthropic API (final fallback)
 
-    private func runAnthropicAPI(content: String) -> String? {
+    private func runAnthropicAPI(content: String, previous: String?) -> String? {
         guard let key = readAPIKey() else { return nil }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
@@ -129,7 +153,7 @@ final class Summarizer {
         let payload: [String: Any] = [
             "model": "claude-haiku-4-5",
             "max_tokens": 160,
-            "system": Summarizer.summaryPrompt,
+            "system": promptWithContinuity(previous: previous),
             "messages": [["role": "user", "content": content]],
         ]
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return nil }

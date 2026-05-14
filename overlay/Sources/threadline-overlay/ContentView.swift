@@ -59,7 +59,8 @@ private struct AgentsList: View {
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
                         ForEach(model.snapshots) { snap in
-                            AgentRow(snap: snap).tag(snap.id)
+                            AgentRow(snap: snap, summary: model.summaries[snap.id])
+                                .tag(snap.id)
                         }
                 }
                 .listStyle(.sidebar)
@@ -70,27 +71,38 @@ private struct AgentsList: View {
 
 private struct AgentRow: View {
     let snap: SourceSnapshot
+    let summary: String?
     var body: some View {
-        HStack(spacing: 8) {
-            StateDot(state: snap.state).frame(width: 7, height: 7)
-            BadgeView(label: snap.badge, color: badgeColor(snap.tool))
+        HStack(alignment: .top, spacing: 8) {
+            StateDot(state: snap.state).frame(width: 7, height: 7).padding(.top, 4)
+            BadgeView(label: snap.badge, color: badgeColor(snap.tool)).padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
                 Text(snap.projectName)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(snap.activityLine)
-                    .font(.system(size: 10, design: .monospaced))
+                // Prefer the LLM-generated summary; fall back to the
+                // activity heuristic until it arrives.
+                Text(secondaryLine)
+                    .font(.system(size: 10, design: .default))
                     .foregroundColor(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 4)
             Text(snap.timeAgoShort)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.secondary)
+                .padding(.top, 2)
         }
         .padding(.vertical, 4)
+    }
+    private var secondaryLine: String {
+        if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+            return s
+        }
+        return snap.activityLine
     }
     private func badgeColor(_ tool: String) -> Color {
         switch tool {

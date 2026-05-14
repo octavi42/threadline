@@ -186,8 +186,32 @@ final class SessionModel: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.snapshots = all
-            if let sel = self.selectedID, all.contains(where: { $0.id == sel }) { return }
-            self.selectedID = firstID
+            if self.selectedID == nil || !all.contains(where: { $0.id == self.selectedID }) {
+                self.selectedID = firstID
+            }
+            // Eagerly summarise the top N. The summarizer's (path, mtime)
+            // cache short-circuits work for sessions whose JSONL hasn't
+            // changed since the last summary, so this is cheap on every
+            // refresh and only pays the LLM call when something actually
+            // moved.
+            for snap in all.prefix(10) {
+                self.kickoffSummary(for: snap)
+            }
+        }
+    }
+
+    private func kickoffSummary(for snap: SourceSnapshot) {
+        guard let path = snap.jsonlPath, let mtime = snap.updatedAt else { return }
+        let id = snap.id
+        let cached = Summarizer.shared.summary(
+            forJSONL: path,
+            mtime: mtime,
+            onUpdate: { [weak self] text in
+                self?.summaries[id] = text
+            }
+        )
+        if let cached = cached, summaries[id] != cached {
+            summaries[id] = cached
         }
     }
 
@@ -207,21 +231,10 @@ final class SessionModel: ObservableObject {
         return snapshots.first { $0.id == id }
     }
 
-    /// Request a summary for the currently-selected snapshot.
-    /// Idempotent — cache hits return immediately; async fetches surface via
-    /// the @Published `summaries` dict.
+    /// Request a summary for the currently-selected snapshot. Shares the
+    /// same kickoff path used during eager pre-warm.
     func requestSummaryForSelection() {
-        guard let snap = selectedSnapshot,
-              let path = snap.jsonlPath,
-              let mtime = snap.updatedAt
-        else { return }
-        let id = snap.id
-        if let cached = Summarizer.shared.summary(forJSONL: path,
-                                                  mtime: mtime,
-                                                  onUpdate: { [weak self] text in
-            self?.summaries[id] = text
-        }) {
-            summaries[id] = cached
-        }
+        guard let snap = selectedSnapshot else { return }
+        kickoffSummary(for: snap)
     }
 }
