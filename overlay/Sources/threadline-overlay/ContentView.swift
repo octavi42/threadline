@@ -95,6 +95,7 @@ private struct AgentsList: View {
                             }
                             label: {
                                 FolderHeader(folder: folder)
+                                    .padding(.leading, 4)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         model.selectedID = folder.selectionID
