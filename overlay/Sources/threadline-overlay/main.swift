@@ -7,7 +7,7 @@ let rest = Array(args.dropFirst())
 switch cmd {
 case "daemon":
     Daemon.run()
-case "toggle", "show", "hide", "quit", "status", "refresh":
+case "toggle", "show", "hide", "quit", "status", "refresh", "list":
     CLI.send(cmd, args: rest)
 case "touch":
     CLI.touch(args: rest)

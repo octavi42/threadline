@@ -71,6 +71,20 @@ enum IPC {
         }
     }
 
+    /// Read until socket close. For multi-line replies like `list`.
+    static func readAll(_ fd: Int32) -> String? {
+        var buf = [UInt8]()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.recv(fd, &chunk, chunk.count, 0)
+            if n <= 0 { break }
+            buf.append(contentsOf: chunk[0..<n])
+        }
+        if buf.isEmpty { return nil }
+        if buf.last == 0x0A { buf.removeLast() }
+        return String(decoding: buf, as: UTF8.self)
+    }
+
     /// Read until newline or EOF. Returns trimmed line, or nil on EOF/err.
     static func readLine(_ fd: Int32) -> String? {
         var buf = [UInt8]()

@@ -123,7 +123,6 @@ final class SessionModel: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.snapshots = all
-            // Keep selection if it still exists; otherwise default to the top row.
             if let sel = self.selectedID, all.contains(where: { $0.id == sel }) { return }
             self.selectedID = firstID
         }

@@ -62,7 +62,11 @@ enum CLI {
         var payload = cmd
         if !args.isEmpty { payload += " " + args.joined(separator: " ") }
         IPC.writeLine(fd, payload)
-        if let reply = IPC.readLine(fd) {
+        // `list` returns multi-line output; everything else is one line. Use
+        // readAll so multi-line replies aren't truncated.
+        if cmd == "list" {
+            if let reply = IPC.readAll(fd) { print(reply) }
+        } else if let reply = IPC.readLine(fd) {
             print(reply)
         }
     }

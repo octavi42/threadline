@@ -98,6 +98,15 @@ enum Daemon {
             c.hide();     return "ok"
         case "refresh":
             model?.refresh(); return "ok"
+        case "list":
+            let snaps = model?.snapshots ?? []
+            if snaps.isEmpty { return "(no open agents)" }
+            let lines = snaps.map { s -> String in
+                let state = s.state.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)
+                let cwd = s.cwd ?? "—"
+                return "\(s.badge) \(state) \(cwd)"
+            }
+            return lines.joined(separator: "\n")
         case "status":
             let f = c.panel.frame
             let n = model?.snapshots.count ?? 0
