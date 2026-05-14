@@ -5,12 +5,19 @@ from pathlib import Path
 from typing import Any
 
 CACHE_DIR = Path.home() / ".cache" / "threadline"
+STATE_DIR = Path.home() / ".local" / "state" / "threadline"
+SESSIONS_DIR = STATE_DIR / "sessions"
 SUMMARY_PATH = CACHE_DIR / "summary.txt"
 STATE_PATH = CACHE_DIR / "state.json"
+ACTIVE_SESSION_PATH = STATE_DIR / "active.json"
 
 
 def ensure_cache_dir() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_state_dir() -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def read_summary() -> str | None:
@@ -36,3 +43,19 @@ def write_cache(summary: str, state: dict[str, Any]) -> None:
         encoding="utf-8",
     )
 
+
+def read_active_session() -> dict[str, Any] | None:
+    if not ACTIVE_SESSION_PATH.exists():
+        return None
+    try:
+        return json.loads(ACTIVE_SESSION_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def write_active_session(state: dict[str, Any]) -> None:
+    ensure_state_dir()
+    ACTIVE_SESSION_PATH.write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )

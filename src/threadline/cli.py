@@ -9,6 +9,7 @@ import time
 
 from .cache import read_state, read_summary, write_cache
 from .collect import collect_context
+from .session import run_session
 from .summarize import render_compact_summary, render_summary
 
 TOP_PANE_OPTION = "@threadline_top_pane"
@@ -426,6 +427,17 @@ def main() -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    session_parser = subparsers.add_parser("session", help="Start a tracked shell session.")
+    session_parser.add_argument(
+        "--shell",
+        help="Shell command to run. Defaults to $SHELL.",
+    )
+    session_parser.add_argument(
+        "--no-panel",
+        action="store_true",
+        help="Record the session without reserving a fixed top panel.",
+    )
+
     subparsers.add_parser("summarize", help="Generate a fresh session summary.")
 
     show_parser = subparsers.add_parser("show", help="Show the cached session summary.")
@@ -509,6 +521,8 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.command == "session":
+        return run_session(shell=args.shell, panel=not args.no_panel)
     if args.command == "summarize":
         return summarize_command()
     if args.command == "show":

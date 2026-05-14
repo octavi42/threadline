@@ -9,3 +9,7 @@ dist/
 build/
 *.egg-info/
 
+# Swift overlay
+overlay/.build/
+overlay/.swiftpm/
+overlay/Package.resolved

@@ -4,6 +4,9 @@ import hashlib
 import os
 import subprocess
 from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from .cache import read_active_session
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,31 @@ def run(command: list[str], cwd: str | None = None) -> CommandResult:
     )
 
 
+def read_session_log(max_bytes: int = 200_000) -> tuple[str, str | None]:
+    log_path = os.environ.get("THREADLINE_SESSION_LOG")
+    if not log_path:
+        active = read_active_session()
+        if active:
+            candidate = active.get("log_path")
+            if isinstance(candidate, str):
+                log_path = candidate
+
+    if not log_path:
+        return "", None
+
+    path = Path(log_path)
+    if not path.exists():
+        return "", str(path)
+
+    with path.open("rb") as log_file:
+        try:
+            log_file.seek(max(0, path.stat().st_size - max_bytes))
+        except OSError:
+            pass
+        data = log_file.read()
+    return data.decode("utf-8", errors="replace"), str(path)
+
+
 def collect_context(pane_lines: int = 3000) -> Context:
     cwd = os.getcwd()
     warnings: list[str] = []
@@ -59,7 +87,12 @@ def collect_context(pane_lines: int = 3000) -> Context:
     pane = run(pane_command)
     pane_text = pane.output if pane.ok else ""
     if not pane.ok:
-        warnings.append("tmux pane capture unavailable; run inside tmux for best results")
+        session_text, session_log = read_session_log()
+        pane_text = session_text
+        if session_log:
+            warnings.append(f"using Threadline session log: {session_log}")
+        else:
+            warnings.append("no tmux pane or Threadline session log available")
 
     pane_hash = hashlib.sha256(pane_text.encode("utf-8")).hexdigest()
 
