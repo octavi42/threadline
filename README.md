@@ -1,57 +1,58 @@
 # Threadline
 
-Threadline is a small terminal companion that summarizes what you are currently working on in a CLI session.
+Threadline is a CLI companion that records a terminal session and summarizes the current work thread.
 
-The first target is a tmux-based workflow:
+The primary workflow is tmux-free:
 
 ```bash
-threadline summarize
-threadline show
-threadline watch
-threadline toggle
+threadline session
 ```
 
-Planned flow:
+This starts your normal shell inside a PTY and records the terminal stream to:
 
 ```text
-tmux pane/git context -> LLM summary -> local cache -> tmux popup
+~/.local/state/threadline/sessions/
 ```
 
-## Try It
-
-Prerequisites for the popup workflow:
+Inside that shell, work normally:
 
 ```bash
-brew install tmux
+vim
+git
+codex
+claude
+npm test
 ```
+
+Then ask Threadline what is going on:
+
+```bash
+threadline show
+threadline summarize
+threadline show --compact --no-wait
+```
+
+## Install
 
 From the project directory:
 
 ```bash
 python -m pip install -e .
-threadline summarize
-threadline show --no-wait
 ```
 
-From inside tmux:
+## Commands
 
 ```bash
-threadline show
-threadline top
-threadline toggle
-threadline reset
+threadline session          # start a tracked shell
+threadline show             # show current summary, wait for a key
+threadline summarize        # refresh summary cache
+threadline watch            # redraw summary periodically
+threadline reset            # clean legacy tmux Threadline panes/options
 ```
 
-`show` opens a temporary top overlay inside tmux and closes when you press any key. Use `--plain` to print in the current pane, or `--no-wait` for scripts.
-`top` opens a managed multi-line Threadline pane above the current pane.
-`toggle` shows that top Threadline pane if hidden, or removes it and returns focus to your work pane if visible.
-Because tmux has no persistent multi-line overlay, this reserves a few rows at the top of the layout.
-`reset` removes stale Threadline panes and restores tmux display options.
+`threadline session --shell zsh` can run a specific shell.
 
-Example tmux bindings:
+## Notes
 
-```tmux
-bind-key t run-shell 'TMUX_PANE=#{pane_id} threadline show'
-bind-key T run-shell 'TMUX_PANE=#{pane_id} threadline summarize && TMUX_PANE=#{pane_id} threadline show'
-bind-key b run-shell 'TMUX_PANE=#{pane_id} threadline toggle'
-```
+Threadline still has legacy tmux commands from the prototype, but tmux is no longer required for session capture.
+
