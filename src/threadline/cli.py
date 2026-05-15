@@ -15,6 +15,7 @@ from .cache import read_state, read_summary, write_cache
 from .collect import collect_context
 from .session import run_session
 from .summarize import render_compact_summary, render_summary
+from .xray.cli import xray_command
 
 TOP_PANE_OPTION = "@threadline_top_pane"
 TOP_TARGET_OPTION = "@threadline_top_target_pane"
@@ -599,6 +600,34 @@ def main() -> int:
     daemon_parser.add_argument("--poll", type=int, default=tail.POLL_SECONDS, help="Poll interval in seconds.")
     daemon_parser.add_argument("--since-days", type=int, default=tail.DEFAULT_SCAN_DAYS, help="Ignore jsonl files older than this on scan.")
 
+    xray_parser = subparsers.add_parser("xray", help="Show per-hunk agent evidence for the current diff.")
+    xray_parser.add_argument(
+        "--base",
+        default=None,
+        help="Git ref to diff against. Defaults to dirty working tree.",
+    )
+    xray_parser.add_argument(
+        "--session",
+        default=None,
+        help="Path to a Claude or Codex JSONL. Defaults to the newest Claude session for this repo.",
+    )
+    xray_parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Render a self-contained HTML report instead of plain text.",
+    )
+    xray_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_out",
+        help="Emit structured JSON for downstream consumers (Swift overlay, etc.).",
+    )
+    xray_parser.add_argument(
+        "--out",
+        default=None,
+        help="Write the report to this file instead of stdout.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "session":
@@ -630,6 +659,14 @@ def main() -> int:
         return diff_command(args.a, args.b)
     if args.command == "history-daemon":
         return history_daemon_command(poll=args.poll, since_days=args.since_days)
+    if args.command == "xray":
+        return xray_command(
+            base=args.base,
+            session=args.session,
+            html=args.html,
+            json_out=args.json_out,
+            out=args.out,
+        )
 
     parser.error(f"unknown command: {args.command}")
     return 2

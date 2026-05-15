@@ -727,6 +727,7 @@ private struct FilesView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            XRayView(snap: snap)
         }
     }
 }
