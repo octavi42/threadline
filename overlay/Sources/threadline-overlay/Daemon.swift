@@ -103,7 +103,7 @@ enum Daemon {
         guard let cwd = obj["cwd"] as? String,
               let pidNum = obj["pid"] as? Int
         else { return }
-        ShellRegistry.shared.touch(pid: pid_t(pidNum), cwd: cwd)
+        ShellRegistry.shared.touch(pid: pid_t(pidNum), cwd: cwd, tty: obj["tty"] as? String)
     }
 
     private static func dispatch(cmd: String) -> String {
@@ -117,6 +117,8 @@ enum Daemon {
             c.hide();     return "ok"
         case "refresh":
             model?.refresh(); return "ok"
+        case "jump":
+            return c.jumpToSelectionMessage()
         case "list":
             let folders = model?.folders ?? []
             if folders.isEmpty { return "(no open agents)" }
