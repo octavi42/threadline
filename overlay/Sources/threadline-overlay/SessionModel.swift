@@ -17,6 +17,40 @@ struct TaskItem: Equatable, Identifiable {
     let status: String   // "in_progress" | "completed" | "pending"
 }
 
+/// A single edit operation the agent performed on a file.
+struct FileEditOp: Equatable, Identifiable {
+    let tool: String       // "Edit" | "Write" | "MultiEdit" | "apply_patch"
+    let timestamp: String
+    var oldText: String = ""
+    var newText: String = ""
+    var patchText: String = ""
+    var note: String = ""
+
+    /// Stable ID derived from content so refreshes don't reset SwiftUI state.
+    var id: String {
+        "\(tool):\(timestamp):\(oldText.prefix(32).hashValue):\(newText.prefix(32).hashValue)"
+    }
+}
+
+/// All edits the agent made to one file, with surrounding context.
+struct FileChangeGroup: Equatable, Identifiable {
+    var id: String { path }
+    let path: String
+    var edits: [FileEditOp] = []
+    var retryCount: Int { max(0, edits.count - 1) }
+    var linesAdded: Int {
+        edits.reduce(0) { sum, op in
+            let text = op.newText.isEmpty ? op.patchText : op.newText
+            return sum + (text.isEmpty ? 0 : text.components(separatedBy: "\n").count)
+        }
+    }
+    var linesRemoved: Int {
+        edits.reduce(0) { sum, op in
+            op.oldText.isEmpty ? sum : sum + op.oldText.components(separatedBy: "\n").count
+        }
+    }
+}
+
 struct SourceSnapshot: Identifiable, Equatable {
     let id: String              // "claude:/Users/foo/proj" — unique per session
     let tool: String            // "Claude" | "Codex" | "Cursor"
@@ -44,6 +78,8 @@ struct SourceSnapshot: Identifiable, Equatable {
     var linesAdded: Int = 0
     /// Lines the agent has removed across Edit/MultiEdit `old_string` payloads.
     var linesRemoved: Int = 0
+    /// Per-file edit operations extracted from the session JSONL.
+    var fileChanges: [FileChangeGroup] = []
     var userTurns: Int = 0
     var assistantTurns: Int = 0
     var sessionStart: Date?               // first record's timestamp
@@ -175,6 +211,9 @@ final class SessionModel: ObservableObject {
     /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
     /// Lands asynchronously when the Summarizer completes a fetch.
     @Published var summaries: [String: String] = [:]
+    /// File paths the user has expanded in the Files tab. Stored here so the
+    /// 3-second refresh cycle doesn't reset the expansion state.
+    @Published var expandedFiles: Set<String> = []
     private var timer: Timer?
 
     /// Treat anything modified within this window as "active enough to surface".
