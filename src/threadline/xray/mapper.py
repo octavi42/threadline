@@ -20,6 +20,30 @@ from .events import Event, Prompt, ToolCall
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"}
 
+# Short replies that authorize/redirect but don't frame work. When an edit's
+# immediate prompt is one of these, we walk backward in the session to find the
+# nearest substantive prompt — that's the one the reviewer wants to see.
+_STOPWORD_PROMPTS: frozenset[str] = frozenset({
+    "yes", "yes please", "y", "yep", "yeah", "yup",
+    "no", "nope", "n",
+    "ok", "okay", "k", "kk", "sure", "fine",
+    "do it", "do this", "go", "go ahead", "let's go", "lets go",
+    "continue", "keep going", "proceed", "next", "next one", "next step",
+    "thanks", "thank you", "thx", "ty", "please",
+    "stop", "pause", "wait", "hold on",
+})
+
+
+def _is_substantive(text: str) -> bool:
+    """A prompt is substantive if it frames work — not a bare authorization."""
+    cleaned = text.strip().lower().rstrip(".!?")
+    if not cleaned:
+        return False
+    if cleaned in _STOPWORD_PROMPTS:
+        return False
+    # Anything beyond ~10 chars that isn't a stopword likely carries intent.
+    return len(cleaned) > 10
+
 
 @dataclass(frozen=True)
 class Hunk:
@@ -34,7 +58,8 @@ class Hunk:
 class HunkAttribution:
     hunk: Hunk
     edits: list[ToolCall] = field(default_factory=list)
-    prompts: list[Prompt] = field(default_factory=list)
+    prompts: list[Prompt] = field(default_factory=list)         # immediate (rolling) prompts
+    framing_prompts: list[Prompt] = field(default_factory=list) # nearest substantive predecessors
 
 
 _DIFF_HEADER_NEW = re.compile(r"^\+\+\+ b/(.+)$")
@@ -104,6 +129,21 @@ def attribute(
     prompts_by_id: dict[str, Prompt] = {
         e.id: e for e in events if isinstance(e, Prompt)
     }
+    chrono_prompts = sorted(prompts_by_id.values(), key=lambda p: p.timestamp)
+    idx_by_id = {p.id: i for i, p in enumerate(chrono_prompts)}
+
+    def framing_for(prompt: Prompt) -> Prompt:
+        """Walk back through the session for the nearest substantive prompt."""
+        if _is_substantive(prompt.text):
+            return prompt
+        idx = idx_by_id.get(prompt.id)
+        if idx is None:
+            return prompt
+        for i in range(idx - 1, -1, -1):
+            cand = chrono_prompts[i]
+            if _is_substantive(cand.text):
+                return cand
+        return prompt
 
     edits_by_file: dict[str, list[ToolCall]] = {}
     for ev in events:
@@ -132,9 +172,21 @@ def attribute(
             if ev.prompt_id and ev.prompt_id in prompts_by_id and ev.prompt_id not in seen_prompts:
                 seen_prompts[ev.prompt_id] = prompts_by_id[ev.prompt_id]
         prompt_list = list(seen_prompts.values())
+
+        framing: dict[str, Prompt] = {}
+        for p in prompt_list:
+            f = framing_for(p)
+            framing.setdefault(f.id, f)
+        framing_list = list(framing.values())
+
         for h in file_hunks:
             result.append(
-                HunkAttribution(hunk=h, edits=edits_sorted, prompts=prompt_list)
+                HunkAttribution(
+                    hunk=h,
+                    edits=edits_sorted,
+                    prompts=prompt_list,
+                    framing_prompts=framing_list,
+                )
             )
 
     return result

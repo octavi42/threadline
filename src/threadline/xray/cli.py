@@ -80,9 +80,13 @@ def render(evidence: list[HunkEvidence]) -> str:
             h = e.attribution.hunk
             range_str = f"@@ +{h.new_start},{h.new_count} -{h.base_start},{h.base_count}"
             lines.append(f"  {range_str}")
-            if e.attribution.prompts:
-                for p in e.attribution.prompts:
-                    lines.append(f"    prompt ({p.source}): {_truncate(p.text)}")
+            display_prompts = e.attribution.framing_prompts or e.attribution.prompts
+            if display_prompts:
+                framing_ids = {p.id for p in e.attribution.framing_prompts}
+                immediate_ids = {p.id for p in e.attribution.prompts}
+                for p in display_prompts:
+                    label = "prompt" if p.id in framing_ids and p.id not in immediate_ids else "prompt"
+                    lines.append(f"    {label} ({p.source}): {_truncate(p.text)}")
             else:
                 lines.append("    prompt: <none in session>")
             if e.attribution.edits:
