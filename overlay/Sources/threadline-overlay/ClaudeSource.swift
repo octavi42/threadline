@@ -310,6 +310,7 @@ enum ClaudeSource {
         var linesAdded = 0
         var linesRemoved = 0
         var editsByFile: [String: [FileEditOp]] = [:]
+        var editSeq = 0
 
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let s = String(raw)
@@ -345,42 +346,60 @@ enum ClaudeSource {
                     case "Edit":
                         let old = (input["old_string"] as? String) ?? ""
                         let new = (input["new_string"] as? String) ?? ""
-                        linesRemoved += countLines(old)
-                        linesAdded   += countLines(new)
+                        let removedN = countLines(old)
+                        let addedN   = countLines(new)
+                        linesRemoved += removedN
+                        linesAdded   += addedN
                         if let fp = filePath {
+                            editSeq += 1
                             editsByFile[fp, default: []].append(
-                                FileEditOp(tool: "Edit", timestamp: ts,
-                                           oldText: truncate(old), newText: truncate(new)))
+                                FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
+                                           oldText: truncate(old), newText: truncate(new),
+                                           rawLinesAdded: addedN, rawLinesRemoved: removedN))
                         }
                     case "MultiEdit":
                         if let edits = input["edits"] as? [[String: Any]] {
                             for e in edits {
                                 let old = (e["old_string"] as? String) ?? ""
                                 let new = (e["new_string"] as? String) ?? ""
-                                linesRemoved += countLines(old)
-                                linesAdded   += countLines(new)
+                                let removedN = countLines(old)
+                                let addedN   = countLines(new)
+                                linesRemoved += removedN
+                                linesAdded   += addedN
                                 if let fp = filePath {
+                                    editSeq += 1
                                     editsByFile[fp, default: []].append(
-                                        FileEditOp(tool: "Edit", timestamp: ts,
-                                                   oldText: truncate(old), newText: truncate(new)))
+                                        FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
+                                                   oldText: truncate(old), newText: truncate(new),
+                                                   rawLinesAdded: addedN, rawLinesRemoved: removedN))
                                 }
                             }
                         }
                     case "Write":
                         let content = (input["content"] as? String) ?? ""
-                        linesAdded += countLines(content)
+                        let addedN = countLines(content)
+                        linesAdded += addedN
                         if let fp = filePath {
+                            editSeq += 1
                             editsByFile[fp, default: []].append(
-                                FileEditOp(tool: "Write", timestamp: ts,
-                                           newText: truncate(content), note: "full file write"))
+                                FileEditOp(seq: editSeq, tool: "Write", timestamp: ts,
+                                           newText: truncate(content), note: "full file write",
+                                           rawLinesAdded: addedN))
                         }
                     case "apply_patch":
                         let patch = (input["patch"] as? String)
                             ?? (input["diff"] as? String) ?? ""
-                        if let fp = filePath {
-                            editsByFile[fp, default: []].append(
-                                FileEditOp(tool: "apply_patch", timestamp: ts,
-                                           patchText: truncate(patch)))
+                        let (patchAdded, patchRemoved) = countPatchLines(patch)
+                        linesAdded   += patchAdded
+                        linesRemoved += patchRemoved
+                        let targets = filePath.map { [$0] } ?? parsePatchPaths(patch)
+                        editSeq += 1
+                        let op = FileEditOp(seq: editSeq, tool: "apply_patch", timestamp: ts,
+                                            patchText: truncate(patch),
+                                            rawLinesAdded: patchAdded,
+                                            rawLinesRemoved: patchRemoved)
+                        for fp in targets {
+                            editsByFile[fp, default: []].append(op)
                         }
                     default: break
                     }
@@ -475,6 +494,34 @@ enum ClaudeSource {
     private static func truncate(_ s: String, max: Int = 4096) -> String {
         if s.count <= max { return s }
         return String(s.prefix(max)) + "\n… (\(s.count - max) chars truncated)"
+    }
+
+    /// Count added/removed lines in a unified diff patch by looking at +/- prefixes.
+    private static func countPatchLines(_ patch: String) -> (added: Int, removed: Int) {
+        var added = 0, removed = 0
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { added += 1 }
+            else if line.hasPrefix("-") && !line.hasPrefix("---") { removed += 1 }
+        }
+        return (added, removed)
+    }
+
+    /// Extract file paths from unified diff headers (--- a/path, +++ b/path).
+    private static func parsePatchPaths(_ patch: String) -> [String] {
+        var paths: Set<String> = []
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: true) {
+            let s = String(line)
+            if s.hasPrefix("+++ b/") {
+                paths.insert(String(s.dropFirst(6)))
+            } else if s.hasPrefix("--- a/") {
+                paths.insert(String(s.dropFirst(6)))
+            } else if s.hasPrefix("+++ ") && !s.hasPrefix("+++ /dev/null") {
+                paths.insert(String(s.dropFirst(4)))
+            } else if s.hasPrefix("--- ") && !s.hasPrefix("--- /dev/null") {
+                paths.insert(String(s.dropFirst(4)))
+            }
+        }
+        return paths.sorted()
     }
 
     /// Pull the assigned task ID out of "Task #N created successfully: ..."

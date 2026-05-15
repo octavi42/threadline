@@ -19,17 +19,20 @@ struct TaskItem: Equatable, Identifiable {
 
 /// A single edit operation the agent performed on a file.
 struct FileEditOp: Equatable, Identifiable {
+    /// Monotonic sequence number assigned at extraction time for stable identity.
+    let seq: Int
     let tool: String       // "Edit" | "Write" | "MultiEdit" | "apply_patch"
     let timestamp: String
     var oldText: String = ""
     var newText: String = ""
     var patchText: String = ""
     var note: String = ""
+    /// Pre-truncation line counts so badges stay accurate even when display
+    /// text is capped at 4KB.
+    var rawLinesAdded: Int = 0
+    var rawLinesRemoved: Int = 0
 
-    /// Stable ID derived from content so refreshes don't reset SwiftUI state.
-    var id: String {
-        "\(tool):\(timestamp):\(oldText.prefix(32).hashValue):\(newText.prefix(32).hashValue)"
-    }
+    var id: String { "\(seq)" }
 }
 
 /// All edits the agent made to one file, with surrounding context.
@@ -38,17 +41,8 @@ struct FileChangeGroup: Equatable, Identifiable {
     let path: String
     var edits: [FileEditOp] = []
     var retryCount: Int { max(0, edits.count - 1) }
-    var linesAdded: Int {
-        edits.reduce(0) { sum, op in
-            let text = op.newText.isEmpty ? op.patchText : op.newText
-            return sum + (text.isEmpty ? 0 : text.components(separatedBy: "\n").count)
-        }
-    }
-    var linesRemoved: Int {
-        edits.reduce(0) { sum, op in
-            op.oldText.isEmpty ? sum : sum + op.oldText.components(separatedBy: "\n").count
-        }
-    }
+    var linesAdded: Int { edits.reduce(0) { $0 + $1.rawLinesAdded } }
+    var linesRemoved: Int { edits.reduce(0) { $0 + $1.rawLinesRemoved } }
 }
 
 struct SourceSnapshot: Identifiable, Equatable {
