@@ -17,6 +17,34 @@ struct TaskItem: Equatable, Identifiable {
     let status: String   // "in_progress" | "completed" | "pending"
 }
 
+/// A single edit operation the agent performed on a file.
+struct FileEditOp: Equatable, Identifiable {
+    /// Monotonic sequence number assigned at extraction time for stable identity.
+    let seq: Int
+    let tool: String       // "Edit" | "Write" | "MultiEdit" | "apply_patch"
+    let timestamp: String
+    var oldText: String = ""
+    var newText: String = ""
+    var patchText: String = ""
+    var note: String = ""
+    /// Pre-truncation line counts so badges stay accurate even when display
+    /// text is capped at 4KB.
+    var rawLinesAdded: Int = 0
+    var rawLinesRemoved: Int = 0
+
+    var id: String { "\(seq)" }
+}
+
+/// All edits the agent made to one file, with surrounding context.
+struct FileChangeGroup: Equatable, Identifiable {
+    var id: String { path }
+    let path: String
+    var edits: [FileEditOp] = []
+    var retryCount: Int { max(0, edits.count - 1) }
+    var linesAdded: Int { edits.reduce(0) { $0 + $1.rawLinesAdded } }
+    var linesRemoved: Int { edits.reduce(0) { $0 + $1.rawLinesRemoved } }
+}
+
 struct SourceSnapshot: Identifiable, Equatable {
     let id: String              // "claude:/Users/foo/proj" — unique per session
     let tool: String            // "Claude" | "Codex" | "Cursor"
@@ -44,6 +72,8 @@ struct SourceSnapshot: Identifiable, Equatable {
     var linesAdded: Int = 0
     /// Lines the agent has removed across Edit/MultiEdit `old_string` payloads.
     var linesRemoved: Int = 0
+    /// Per-file edit operations extracted from the session JSONL.
+    var fileChanges: [FileChangeGroup] = []
     var userTurns: Int = 0
     var assistantTurns: Int = 0
     var sessionStart: Date?               // first record's timestamp
@@ -175,6 +205,9 @@ final class SessionModel: ObservableObject {
     /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
     /// Lands asynchronously when the Summarizer completes a fetch.
     @Published var summaries: [String: String] = [:]
+    /// File paths the user has expanded in the Files tab. Stored here so the
+    /// 3-second refresh cycle doesn't reset the expansion state.
+    @Published var expandedFiles: Set<String> = []
     private var timer: Timer?
 
     /// Treat anything modified within this window as "active enough to surface".

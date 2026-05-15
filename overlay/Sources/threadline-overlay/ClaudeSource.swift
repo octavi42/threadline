@@ -187,6 +187,7 @@ enum ClaudeSource {
         snap.toolTokenEstimate = aggregates.toolTokens
         snap.linesAdded = aggregates.linesAdded
         snap.linesRemoved = aggregates.linesRemoved
+        snap.fileChanges = aggregates.fileChanges
         let finalTasks = aggregates.tasks
             .ifEmpty(else: {
                 // Fall back to whatever we found in the tail.
@@ -265,6 +266,8 @@ enum ClaudeSource {
         let linesAdded: Int
         /// Lines removed across Edit/MultiEdit (old_string payloads).
         let linesRemoved: Int
+        /// Per-file edit operations reconstructed from the session.
+        let fileChanges: [FileChangeGroup]
     }
     private struct FullSessionCacheEntry {
         let mtime: Date
@@ -290,7 +293,8 @@ enum ClaudeSource {
         sessionCacheLock.unlock()
 
         let empty = FullSessionAggregates(tasks: [], toolTokens: [:],
-                                          linesAdded: 0, linesRemoved: 0)
+                                          linesAdded: 0, linesRemoved: 0,
+                                          fileChanges: [])
         guard let text = try? String(contentsOfFile: jsonlPath, encoding: .utf8) else {
             return empty
         }
@@ -305,6 +309,8 @@ enum ClaudeSource {
         var resultBytes: [String: Int] = [:]
         var linesAdded = 0
         var linesRemoved = 0
+        var editsByFile: [String: [FileEditOp]] = [:]
+        var editSeq = 0
 
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let s = String(raw)
@@ -333,22 +339,68 @@ enum ClaudeSource {
                         inputBytes[name, default: 0] += bytes.count
                     }
 
-                    // Line accounting: count newlines in the patch payloads.
-                    // `Edit` and `MultiEdit` give us both old (removed) and
-                    // new (added); `Write` is treated as net-added.
+                    let filePath = input["file_path"] as? String
+                    let ts = (obj["timestamp"] as? String) ?? ""
+
                     switch name {
                     case "Edit":
-                        if let s = input["old_string"] as? String { linesRemoved += countLines(s) }
-                        if let s = input["new_string"] as? String { linesAdded   += countLines(s) }
+                        let old = (input["old_string"] as? String) ?? ""
+                        let new = (input["new_string"] as? String) ?? ""
+                        let removedN = countLines(old)
+                        let addedN   = countLines(new)
+                        linesRemoved += removedN
+                        linesAdded   += addedN
+                        if let fp = filePath {
+                            editSeq += 1
+                            editsByFile[fp, default: []].append(
+                                FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
+                                           oldText: truncate(old), newText: truncate(new),
+                                           rawLinesAdded: addedN, rawLinesRemoved: removedN))
+                        }
                     case "MultiEdit":
                         if let edits = input["edits"] as? [[String: Any]] {
                             for e in edits {
-                                if let s = e["old_string"] as? String { linesRemoved += countLines(s) }
-                                if let s = e["new_string"] as? String { linesAdded   += countLines(s) }
+                                let old = (e["old_string"] as? String) ?? ""
+                                let new = (e["new_string"] as? String) ?? ""
+                                let removedN = countLines(old)
+                                let addedN   = countLines(new)
+                                linesRemoved += removedN
+                                linesAdded   += addedN
+                                if let fp = filePath {
+                                    editSeq += 1
+                                    editsByFile[fp, default: []].append(
+                                        FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
+                                                   oldText: truncate(old), newText: truncate(new),
+                                                   rawLinesAdded: addedN, rawLinesRemoved: removedN))
+                                }
                             }
                         }
                     case "Write":
-                        if let s = input["content"] as? String { linesAdded += countLines(s) }
+                        let content = (input["content"] as? String) ?? ""
+                        let addedN = countLines(content)
+                        linesAdded += addedN
+                        if let fp = filePath {
+                            editSeq += 1
+                            editsByFile[fp, default: []].append(
+                                FileEditOp(seq: editSeq, tool: "Write", timestamp: ts,
+                                           newText: truncate(content), note: "full file write",
+                                           rawLinesAdded: addedN))
+                        }
+                    case "apply_patch":
+                        let patch = (input["patch"] as? String)
+                            ?? (input["diff"] as? String) ?? ""
+                        let (patchAdded, patchRemoved) = countPatchLines(patch)
+                        linesAdded   += patchAdded
+                        linesRemoved += patchRemoved
+                        let targets = filePath.map { [$0] } ?? parsePatchPaths(patch)
+                        editSeq += 1
+                        let op = FileEditOp(seq: editSeq, tool: "apply_patch", timestamp: ts,
+                                            patchText: truncate(patch),
+                                            rawLinesAdded: patchAdded,
+                                            rawLinesRemoved: patchRemoved)
+                        for fp in targets {
+                            editsByFile[fp, default: []].append(op)
+                        }
                     default: break
                     }
 
@@ -414,10 +466,15 @@ enum ClaudeSource {
             if bytes > 0 { toolTokens[name] = bytes / 4 }
         }
 
+        let fileChanges = editsByFile.map { path, ops in
+            FileChangeGroup(path: path, edits: ops)
+        }.sorted { $0.path < $1.path }
+
         let aggregates = FullSessionAggregates(tasks: tasks,
                                                toolTokens: toolTokens,
                                                linesAdded: linesAdded,
-                                               linesRemoved: linesRemoved)
+                                               linesRemoved: linesRemoved,
+                                               fileChanges: fileChanges)
         sessionCacheLock.lock()
         sessionCache[jsonlPath] = FullSessionCacheEntry(mtime: mtime, aggregates: aggregates)
         sessionCacheLock.unlock()
@@ -431,6 +488,40 @@ enum ClaudeSource {
         var n = 0
         for ch in s where ch == "\n" { n += 1 }
         return n + 1
+    }
+
+    /// Cap payload strings stored in FileEditOp to avoid unbounded memory.
+    private static func truncate(_ s: String, max: Int = 4096) -> String {
+        if s.count <= max { return s }
+        return String(s.prefix(max)) + "\n… (\(s.count - max) chars truncated)"
+    }
+
+    /// Count added/removed lines in a unified diff patch by looking at +/- prefixes.
+    private static func countPatchLines(_ patch: String) -> (added: Int, removed: Int) {
+        var added = 0, removed = 0
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { added += 1 }
+            else if line.hasPrefix("-") && !line.hasPrefix("---") { removed += 1 }
+        }
+        return (added, removed)
+    }
+
+    /// Extract file paths from unified diff headers (--- a/path, +++ b/path).
+    private static func parsePatchPaths(_ patch: String) -> [String] {
+        var paths: Set<String> = []
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: true) {
+            let s = String(line)
+            if s.hasPrefix("+++ b/") {
+                paths.insert(String(s.dropFirst(6)))
+            } else if s.hasPrefix("--- a/") {
+                paths.insert(String(s.dropFirst(6)))
+            } else if s.hasPrefix("+++ ") && !s.hasPrefix("+++ /dev/null") {
+                paths.insert(String(s.dropFirst(4)))
+            } else if s.hasPrefix("--- ") && !s.hasPrefix("--- /dev/null") {
+                paths.insert(String(s.dropFirst(4)))
+            }
+        }
+        return paths.sorted()
     }
 
     /// Pull the assigned task ID out of "Task #N created successfully: ..."

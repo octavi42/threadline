@@ -226,7 +226,7 @@ private struct DetailsPane: View {
                         switch tab {
                         case .overview: OverviewView(snap: snap)
                         case .tasks:    TasksView(snap: snap)
-                        case .files:    FilesView(snap: snap)
+                        case .files:    FilesView(model: model, snap: snap)
                         case .summary:  SummaryView(model: model, snap: snap)
                         }
                     }
@@ -265,7 +265,7 @@ private struct FolderDetailsPane: View {
                     FolderStatsView(folder: folder)
                     FolderSubagentsView(model: model, folder: folder)
                     FolderTasksView(folder: folder)
-                    FolderFilesView(folder: folder)
+                    FolderFilesView(model: model, folder: folder)
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -418,24 +418,22 @@ private struct FolderTasksView: View {
 }
 
 private struct FolderFilesView: View {
+    @ObservedObject var model: SessionModel
     let folder: SessionFolder
 
-    var body: some View {
-        if !uniqueFiles.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                sectionTitle("FILES EDITED (\(uniqueFiles.count))")
-                ForEach(uniqueFiles.prefix(12), id: \.self) { path in
-                    Text((path as NSString).abbreviatingWithTildeInPath)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
+    private var mergedChanges: [FileChangeGroup] {
+        var byPath: [String: [FileEditOp]] = [:]
+        for snap in folder.snapshots {
+            for group in snap.fileChanges {
+                byPath[group.path, default: []].append(contentsOf: group.edits)
             }
         }
+        return byPath.map { path, ops in
+            FileChangeGroup(path: path, edits: ops)
+        }.sorted { $0.path < $1.path }
     }
 
-    private var uniqueFiles: [String] {
+    private var fallbackFiles: [String] {
         var seen: Set<String> = []
         var out: [String] = []
         for path in folder.snapshots.flatMap(\.filesEdited) where !seen.contains(path) {
@@ -443,6 +441,39 @@ private struct FolderFilesView: View {
             out.append(path)
         }
         return out
+    }
+
+    var body: some View {
+        let changes = mergedChanges
+        let fileCount = changes.isEmpty ? fallbackFiles.count : changes.count
+        if fileCount > 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                sectionTitle("FILES EDITED (\(fileCount))")
+                if !changes.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(changes) { group in
+                            FileChangeRow(group: group,
+                                          isExpanded: model.expandedFiles.contains(group.path),
+                                          toggle: {
+                                if model.expandedFiles.contains(group.path) {
+                                    model.expandedFiles.remove(group.path)
+                                } else {
+                                    model.expandedFiles.insert(group.path)
+                                }
+                            })
+                        }
+                    }
+                } else {
+                    ForEach(fallbackFiles.prefix(12), id: \.self) { path in
+                        Text((path as NSString).abbreviatingWithTildeInPath)
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -617,7 +648,13 @@ private struct TaskRow: View {
 }
 
 private struct FilesView: View {
+    @ObservedObject var model: SessionModel
     let snap: SourceSnapshot
+
+    private var fileCount: Int {
+        snap.fileChanges.isEmpty ? snap.filesEdited.count : snap.fileChanges.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if !snap.toolCallCounts.isEmpty {
@@ -644,7 +681,7 @@ private struct FilesView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
-                    Text("FILES EDITED (\(snap.filesEdited.count))")
+                    Text("FILES EDITED (\(fileCount))")
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .tracking(0.5)
                         .foregroundColor(.secondary)
@@ -659,11 +696,21 @@ private struct FilesView: View {
                     }
                     Spacer()
                 }
-                if snap.filesEdited.isEmpty {
-                    Text("None yet.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                } else {
+                if !snap.fileChanges.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(snap.fileChanges) { group in
+                            FileChangeRow(group: group,
+                                          isExpanded: model.expandedFiles.contains(group.path),
+                                          toggle: {
+                                if model.expandedFiles.contains(group.path) {
+                                    model.expandedFiles.remove(group.path)
+                                } else {
+                                    model.expandedFiles.insert(group.path)
+                                }
+                            })
+                        }
+                    }
+                } else if !snap.filesEdited.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(snap.filesEdited, id: \.self) { path in
                             Text((path as NSString).abbreviatingWithTildeInPath)
@@ -674,8 +721,217 @@ private struct FilesView: View {
                                 .truncationMode(.middle)
                         }
                     }
+                } else {
+                    Text("None yet.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
                 }
             }
+        }
+    }
+}
+
+private struct FileChangeRow: View {
+    let group: FileChangeGroup
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+                    Text((group.path as NSString).lastPathComponent)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 4) {
+                        if group.linesAdded > 0 {
+                            Text("+\(group.linesAdded)")
+                                .foregroundColor(Color(red: 0.30, green: 0.80, blue: 0.50))
+                        }
+                        if group.linesRemoved > 0 {
+                            Text("−\(group.linesRemoved)")
+                                .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.45))
+                        }
+                        Text("\(group.edits.count) edit\(group.edits.count == 1 ? "" : "s")")
+                            .foregroundColor(.secondary)
+                    }
+                    .font(.system(size: 10, design: .monospaced))
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !isExpanded {
+                Text((group.path as NSString).abbreviatingWithTildeInPath)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 20)
+                    .padding(.bottom, 4)
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text((group.path as NSString).abbreviatingWithTildeInPath)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+
+                    ForEach(group.edits) { op in
+                        EditOpView(op: op)
+                    }
+                }
+                .padding(.leading, 20)
+                .padding(.bottom, 10)
+            }
+
+            Divider().opacity(0.5)
+        }
+    }
+}
+
+private struct EditOpView: View {
+    let op: FileEditOp
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(op.tool)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(toolColor.opacity(0.15))
+                    )
+                    .foregroundColor(toolColor)
+                if !op.note.isEmpty {
+                    Text(op.note)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+
+            if !op.patchText.isEmpty {
+                DiffBlock(text: op.patchText, mode: .patch)
+            } else {
+                if !op.oldText.isEmpty {
+                    DiffBlock(text: op.oldText, mode: .removed)
+                }
+                if !op.newText.isEmpty {
+                    DiffBlock(text: op.newText, mode: .added)
+                }
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        )
+    }
+
+    private var toolColor: Color {
+        switch op.tool {
+        case "Edit":        return Color(red: 0.40, green: 0.70, blue: 1.0)
+        case "Write":       return Color(red: 0.30, green: 0.80, blue: 0.50)
+        case "apply_patch": return Color(red: 1.0,  green: 0.65, blue: 0.20)
+        default:            return .secondary
+        }
+    }
+}
+
+private enum DiffMode { case added, removed, patch }
+
+private struct DiffBlock: View {
+    let text: String
+    let mode: DiffMode
+
+    var body: some View {
+        let lines = text.components(separatedBy: "\n")
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines.prefix(50).enumerated()), id: \.offset) { _, line in
+                    lineView(line)
+                }
+                if lines.count > 50 {
+                    Text("… \(lines.count - 50) more lines")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(bgColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(bgColor.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+
+    private func lineView(_ line: String) -> some View {
+        HStack(spacing: 0) {
+            Text(prefix)
+                .foregroundColor(prefixColor)
+                .frame(width: 14, alignment: .center)
+            Text(line.isEmpty ? " " : line)
+                .foregroundColor(.primary.opacity(0.85))
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11, design: .monospaced))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 0.5)
+        .background(lineBackground(line))
+    }
+
+    private func lineBackground(_ line: String) -> Color {
+        switch mode {
+        case .added:   return Color(red: 0.30, green: 0.80, blue: 0.50).opacity(0.06)
+        case .removed: return Color(red: 0.95, green: 0.45, blue: 0.45).opacity(0.06)
+        case .patch:
+            if line.hasPrefix("+") { return Color(red: 0.30, green: 0.80, blue: 0.50).opacity(0.06) }
+            if line.hasPrefix("-") { return Color(red: 0.95, green: 0.45, blue: 0.45).opacity(0.06) }
+            return .clear
+        }
+    }
+
+    private var prefix: String {
+        switch mode {
+        case .added:   return "+"
+        case .removed: return "−"
+        case .patch:   return ""
+        }
+    }
+
+    private var prefixColor: Color {
+        switch mode {
+        case .added:   return Color(red: 0.30, green: 0.80, blue: 0.50)
+        case .removed: return Color(red: 0.95, green: 0.45, blue: 0.45)
+        case .patch:   return .secondary
+        }
+    }
+
+    private var bgColor: Color {
+        switch mode {
+        case .added:   return Color(red: 0.30, green: 0.80, blue: 0.50)
+        case .removed: return Color(red: 0.95, green: 0.45, blue: 0.45)
+        case .patch:   return Color.secondary
         }
     }
 }
