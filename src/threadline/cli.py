@@ -7,6 +7,10 @@ import subprocess
 import sys
 import time
 
+from datetime import datetime, timezone
+
+from . import diff as history_diff
+from . import history, tail
 from .cache import read_state, read_summary, write_cache
 from .collect import collect_context
 from .session import run_session
@@ -421,6 +425,69 @@ def toggle_command(height: int, interval: int) -> int:
     return open_top_pane(height=height, interval=interval)
 
 
+def _humanize_age(iso_ts: str | None) -> str:
+    if not iso_ts:
+        return "?"
+    try:
+        ts = datetime.fromisoformat(iso_ts)
+    except ValueError:
+        return "?"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - ts
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+def history_daemon_command(poll: int, since_days: int) -> int:
+    return tail.run_daemon(poll_seconds=poll, since_days=since_days)
+
+
+def log_command(limit: int, agent_filter: str | None, cwd_filter: str | None) -> int:
+    entries = history.read_index()
+    if agent_filter:
+        entries = [e for e in entries if e.get("agent") == agent_filter]
+    if cwd_filter:
+        entries = [e for e in entries if cwd_filter in (e.get("cwd") or "")]
+    entries = entries[:limit]
+    if not entries:
+        print("# no sessions found")
+        return 0
+    print(f"{'ID':<8} {'AGE':>4}  {'AGENT':<7} {'SNAPS':>5}  {'CWD':<48}  PROMPT")
+    for e in entries:
+        sid = e.get("id") or ""
+        short = history_diff.short_id(sid)
+        age = _humanize_age(e.get("updated_at"))
+        agent = e.get("agent") or "?"
+        snaps = e.get("snapshot_count", 0)
+        cwd = (e.get("cwd") or "")[-48:]
+        prompt = (e.get("first_prompt") or "").splitlines()[0][:60] if e.get("first_prompt") else ""
+        print(f"{short:<8} {age:>4}  {agent:<7} {snaps:>5}  {cwd:<48}  {prompt}")
+    return 0
+
+
+def diff_command(a: str, b: str | None) -> int:
+    a_id = history_diff.resolve(a)
+    if a_id is None:
+        print(f"# could not resolve session: {a}", file=sys.stderr)
+        return 1
+    if b is None:
+        print(history_diff.diff_one(a_id), end="")
+        return 0
+    b_id = history_diff.resolve(b)
+    if b_id is None:
+        print(f"# could not resolve session: {b}", file=sys.stderr)
+        return 1
+    print(history_diff.diff_two(a_id, b_id), end="")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="threadline",
@@ -520,6 +587,19 @@ def main() -> int:
 
     subparsers.add_parser("reset", help="Remove stale Threadline tmux panes and status options.")
 
+    log_parser = subparsers.add_parser("log", help="List recorded agent sessions across Claude/Codex/Cursor.")
+    log_parser.add_argument("--limit", type=int, default=30, help="Max rows to print.")
+    log_parser.add_argument("--agent", choices=["claude", "codex", "cursor"], default=None)
+    log_parser.add_argument("--cwd", default=None, help="Filter by substring of session cwd.")
+
+    diff_parser = subparsers.add_parser("diff", help="Show what a session changed, or compare two sessions.")
+    diff_parser.add_argument("a", help="Session id or short-id prefix.")
+    diff_parser.add_argument("b", nargs="?", default=None, help="Optional second session id to compare against.")
+
+    daemon_parser = subparsers.add_parser("history-daemon", help="Run the history tailer in a loop.")
+    daemon_parser.add_argument("--poll", type=int, default=tail.POLL_SECONDS, help="Poll interval in seconds.")
+    daemon_parser.add_argument("--since-days", type=int, default=tail.DEFAULT_SCAN_DAYS, help="Ignore jsonl files older than this on scan.")
+
     xray_parser = subparsers.add_parser("xray", help="Show per-hunk agent evidence for the current diff.")
     xray_parser.add_argument(
         "--base",
@@ -573,6 +653,12 @@ def main() -> int:
         return toggle_command(height=args.height, interval=args.interval)
     if args.command == "reset":
         return reset_command()
+    if args.command == "log":
+        return log_command(limit=args.limit, agent_filter=args.agent, cwd_filter=args.cwd)
+    if args.command == "diff":
+        return diff_command(args.a, args.b)
+    if args.command == "history-daemon":
+        return history_daemon_command(poll=args.poll, since_days=args.since_days)
     if args.command == "xray":
         return xray_command(
             base=args.base,

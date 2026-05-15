@@ -25,14 +25,16 @@ final class ClaudeSourceTests: XCTestCase {
         XCTAssertEqual(snap.tasks.first?.content, "Read auth module")
         XCTAssertEqual(snap.tasks.first?.status, "completed")
 
-        // One Edit tool_use → one file edited.
-        XCTAssertEqual(snap.filesEdited, ["/Users/test/proj/auth.swift"])
+        // One Edit + one Write → two files edited.
+        XCTAssertEqual(snap.filesEdited, ["/Users/test/proj/auth.swift",
+                                          "/Users/test/proj/middleware.swift"])
 
         // Tool counts cover every tool_use, including the TaskCreate / TaskUpdate
         // calls themselves.
         XCTAssertEqual(snap.toolCallCounts["TaskCreate"], 2)
         XCTAssertEqual(snap.toolCallCounts["TaskUpdate"], 1)
         XCTAssertEqual(snap.toolCallCounts["Edit"],       1)
+        XCTAssertEqual(snap.toolCallCounts["Write"],      1)
 
         // Last assistant text fallback (no in-progress task, no active tool target).
         XCTAssertEqual(snap.lastText, "Done with the auth read; starting on middleware.")
@@ -50,8 +52,33 @@ final class ClaudeSourceTests: XCTestCase {
         XCTAssertEqual(SourceSnapshot.formatTokens(1_200_000), "1.2M")
 
         // Edit's old_string had 3 lines, new_string had 5 lines.
+        // Write's content has 3 lines (trailing newline counts).
         XCTAssertEqual(snap.linesRemoved, 3)
-        XCTAssertEqual(snap.linesAdded,   5)
+        XCTAssertEqual(snap.linesAdded,   8)
+
+        // --- fileChanges: per-file edit operations ---
+        XCTAssertEqual(snap.fileChanges.count, 2)
+
+        let authGroup = snap.fileChanges.first { $0.path == "/Users/test/proj/auth.swift" }
+        XCTAssertNotNil(authGroup)
+        XCTAssertEqual(authGroup?.edits.count, 1)
+        XCTAssertEqual(authGroup?.edits.first?.tool, "Edit")
+        XCTAssertEqual(authGroup?.edits.first?.oldText, "line1\nline2\nline3")
+        XCTAssertEqual(authGroup?.edits.first?.newText, "new1\nnew2\nnew3\nnew4\nnew5")
+        XCTAssertEqual(authGroup?.linesAdded, 5)
+        XCTAssertEqual(authGroup?.linesRemoved, 3)
+
+        let mwGroup = snap.fileChanges.first { $0.path == "/Users/test/proj/middleware.swift" }
+        XCTAssertNotNil(mwGroup)
+        XCTAssertEqual(mwGroup?.edits.count, 1)
+        XCTAssertEqual(mwGroup?.edits.first?.tool, "Write")
+        XCTAssertEqual(mwGroup?.edits.first?.note, "full file write")
+        XCTAssertEqual(mwGroup?.linesAdded, 3)
+        XCTAssertEqual(mwGroup?.linesRemoved, 0)
+
+        // Unique IDs across all edit ops.
+        let allIDs = snap.fileChanges.flatMap(\.edits).map(\.id)
+        XCTAssertEqual(Set(allIDs).count, allIDs.count, "edit op IDs must be unique")
     }
 }
 
