@@ -74,15 +74,9 @@ enum CLI {
     }
 
     private static func spawnDaemon() -> Bool {
-        let exe = CommandLine.arguments[0]
-        // Resolve to absolute path so the spawn survives wherever we ran from.
-        let resolved = (exe as NSString).expandingTildeInPath
-        let fullPath: String
-        if resolved.hasPrefix("/") {
-            fullPath = resolved
-        } else {
-            let cwd = FileManager.default.currentDirectoryPath
-            fullPath = (cwd as NSString).appendingPathComponent(resolved)
+        guard let fullPath = Bundle.main.executablePath else {
+            FileHandle.standardError.write(Data("could not resolve executable path\n".utf8))
+            return false
         }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: fullPath)
