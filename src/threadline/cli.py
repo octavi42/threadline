@@ -11,6 +11,7 @@ from .cache import read_state, read_summary, write_cache
 from .collect import collect_context
 from .session import run_session
 from .summarize import render_compact_summary, render_summary
+from .xray.cli import xray_command
 
 TOP_PANE_OPTION = "@threadline_top_pane"
 TOP_TARGET_OPTION = "@threadline_top_target_pane"
@@ -519,6 +520,13 @@ def main() -> int:
 
     subparsers.add_parser("reset", help="Remove stale Threadline tmux panes and status options.")
 
+    xray_parser = subparsers.add_parser("xray", help="Show per-hunk agent evidence for the current diff.")
+    xray_parser.add_argument(
+        "--base",
+        default=None,
+        help="Git ref to diff against. Defaults to dirty working tree.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "session":
@@ -544,6 +552,8 @@ def main() -> int:
         return toggle_command(height=args.height, interval=args.interval)
     if args.command == "reset":
         return reset_command()
+    if args.command == "xray":
+        return xray_command(base=args.base)
 
     parser.error(f"unknown command: {args.command}")
     return 2
