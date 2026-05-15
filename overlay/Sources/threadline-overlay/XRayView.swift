@@ -29,8 +29,9 @@ struct XRayView: View {
 
     private var header: some View {
         HStack {
-            Text("X-Ray")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            Text("X-RAY")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.5)
                 .foregroundColor(.secondary)
             Spacer()
             Button(action: fetch) {

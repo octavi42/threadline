@@ -23,10 +23,26 @@ enum XRayError: Error, LocalizedError {
 enum XRayFetcher {
     /// Run `threadline xray --json` in the given cwd and decode the report.
     /// Uses a login shell so user PATH (pip-installed `threadline`) is picked up.
+    ///
+    /// If the caller doesn't pin a base ref and the working tree is clean,
+    /// automatically falls back to `HEAD~1` so the viewer always shows
+    /// something useful instead of "no changes vs HEAD."
     static func fetch(
         cwd: String,
         base: String? = nil,
         session: String? = nil
+    ) -> Result<XRayReport, XRayError> {
+        let result = runOnce(cwd: cwd, base: base, session: session)
+        if case .failure(.noChanges) = result, base == nil {
+            return runOnce(cwd: cwd, base: "HEAD~1", session: session)
+        }
+        return result
+    }
+
+    private static func runOnce(
+        cwd: String,
+        base: String?,
+        session: String?
     ) -> Result<XRayReport, XRayError> {
         var command = "threadline xray --json"
         if let base = base {

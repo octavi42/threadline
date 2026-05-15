@@ -5,7 +5,6 @@ enum DetailTab: String, CaseIterable, Identifiable {
     case tasks    = "Tasks"
     case files    = "Files"
     case summary  = "Summary"
-    case xray     = "X-Ray"
     var id: String { rawValue }
 }
 
@@ -229,7 +228,6 @@ private struct DetailsPane: View {
                         case .tasks:    TasksView(snap: snap)
                         case .files:    FilesView(snap: snap)
                         case .summary:  SummaryView(model: model, snap: snap)
-                        case .xray:     XRayView(snap: snap)
                         }
                     }
                     .padding(20)
@@ -678,6 +676,7 @@ private struct FilesView: View {
                     }
                 }
             }
+            XRayView(snap: snap)
         }
     }
 }
