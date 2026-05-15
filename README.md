@@ -60,6 +60,19 @@ threadline reset            # clean legacy tmux Threadline panes/options
 
 `threadline session --shell zsh` can run a specific shell.
 
+### Agent history (Claude / Codex / Cursor)
+
+A background tailer watches agent session JSONL files and snapshots tracked git files on new activity. State lives under `~/.local/state/threadline/snapshots/`.
+
+```bash
+threadline history-daemon   # run the tailer (leave this running)
+threadline log              # list sessions with snapshot counts
+threadline diff <short-id>  # what changed within one session
+threadline diff <a> <b>     # compare two sessions (cross-agent OK)
+```
+
+The macOS overlay surfaces terminated sessions with file snapshots as **HCD** / **HCX** / **HCU** rows (last 24h). Live tabs stay **CLD** / **CDX** / **CUR**.
+
 ## Notes
 
 Threadline still has legacy tmux commands from the prototype, but tmux is no longer required for session capture.
