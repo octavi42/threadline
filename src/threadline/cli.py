@@ -526,6 +526,11 @@ def main() -> int:
         default=None,
         help="Git ref to diff against. Defaults to dirty working tree.",
     )
+    xray_parser.add_argument(
+        "--session",
+        default=None,
+        help="Path to a Claude or Codex JSONL. Defaults to the newest Claude session for this repo.",
+    )
 
     args = parser.parse_args()
 
@@ -553,7 +558,7 @@ def main() -> int:
     if args.command == "reset":
         return reset_command()
     if args.command == "xray":
-        return xray_command(base=args.base)
+        return xray_command(base=args.base, session=args.session)
 
     parser.error(f"unknown command: {args.command}")
     return 2

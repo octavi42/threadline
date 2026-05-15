@@ -45,10 +45,17 @@ def _result_text(result: Any) -> tuple[str | None, int | None]:
                 parts.append(str(result["stdout"]))
             if result.get("stderr"):
                 parts.append(str(result["stderr"]))
+            output_text = "\n".join(parts) or None
             exit_code = result.get("exitCode")
             if isinstance(exit_code, int):
-                return "\n".join(parts) or None, exit_code
-            return "\n".join(parts) or None, None
+                return output_text, exit_code
+            # Claude Code Bash results don't always carry exitCode; infer from
+            # interrupted + stderr instead.
+            if result.get("interrupted") is True:
+                return output_text, -1
+            if result.get("interrupted") is False and not result.get("stderr"):
+                return output_text, 0
+            return output_text, None
         # Edit/Write/Read: just stringify
         return json.dumps(result, default=str)[:4000], None
     if isinstance(result, list):
