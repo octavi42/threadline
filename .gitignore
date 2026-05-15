@@ -13,3 +13,5 @@ build/
 overlay/.build/
 overlay/.swiftpm/
 overlay/Package.resolved
+
+.claude/
