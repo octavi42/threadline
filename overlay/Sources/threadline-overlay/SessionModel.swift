@@ -270,6 +270,13 @@ final class SessionModel: ObservableObject {
             return s
         }
 
+        // History rows from the Python snapshot store. Surfaces terminated
+        // sessions that produced at least one file snapshot in the last 24h,
+        // and aren't already in the live set above.
+        let historyCutoff = Date().addingTimeInterval(-24 * 3600)
+        let liveIDs = Set(all.map { $0.id })
+        all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs))
+
         // Most recently active first; running > others within the same time bucket.
         all.sort { a, b in
             let ad = a.updatedAt ?? .distantPast
