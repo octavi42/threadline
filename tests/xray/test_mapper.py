@@ -43,6 +43,29 @@ def test_parse_diff_extracts_hunks_per_file():
     assert h2.new_start == 12 and h2.new_count == 4
 
 
+def test_parse_diff_captures_hunk_body():
+    text = """\
+diff --git a/x.py b/x.py
+--- a/x.py
++++ b/x.py
+@@ -1,3 +1,4 @@
+ def f():
+-    return 1
++    return 2
++    # new comment
+     pass
+"""
+    hunks = parse_diff(text)
+    h = hunks["x.py"][0]
+    assert h.body == (
+        " def f():",
+        "-    return 1",
+        "+    return 2",
+        "+    # new comment",
+        "     pass",
+    )
+
+
 def test_parse_diff_handles_unified_zero_default_count():
     """git diff --unified=0 may emit headers without an explicit count, defaulting to 1."""
     text = """\

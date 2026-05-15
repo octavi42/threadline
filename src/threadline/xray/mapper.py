@@ -52,6 +52,7 @@ class Hunk:
     base_count: int
     new_start: int           # 1-based start line in the new file
     new_count: int
+    body: tuple[str, ...] = ()  # raw +/-/space lines following the @@ header
 
 
 @dataclass
@@ -70,39 +71,58 @@ _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 def parse_diff(diff_text: str) -> dict[str, list[Hunk]]:
     """Parse `git diff --unified=N` text into a mapping of file -> hunks.
 
-    Only the @@ headers are read; hunk bodies are intentionally ignored — line
-    counts come from the header, which is what attribution needs.
+    Captures both the @@ headers (line ranges) and the body lines (the
+    `+`/`-`/` ` content that follows). The body lets renderers display the
+    actual change inline instead of only metadata.
     """
     hunks: dict[str, list[Hunk]] = {}
     current_file: str | None = None
+    current_body: list[str] = []
+    pending: list[tuple[str, dict]] = []  # (file_path, header_kwargs)
+
+    def flush_pending_with_body():
+        if pending:
+            file_path, kwargs = pending.pop()
+            hunks[file_path].append(
+                Hunk(file_path=file_path, body=tuple(current_body), **kwargs)
+            )
+            current_body.clear()
 
     for line in diff_text.splitlines():
         m = _DIFF_HEADER_NEW.match(line)
         if m:
+            flush_pending_with_body()
             current_file = m.group(1)
             hunks.setdefault(current_file, [])
             continue
         if line.startswith("--- ") and _DIFF_HEADER_DEL.match(line):
-            # Track deletion-only files so we can attribute them too.
+            flush_pending_with_body()
             current_file = _DIFF_HEADER_DEL.match(line).group(1)
             hunks.setdefault(current_file, [])
             continue
         m = _HUNK_HEADER.match(line)
         if m and current_file is not None:
-            base_start = int(m.group(1))
-            base_count = int(m.group(2)) if m.group(2) is not None else 1
-            new_start = int(m.group(3))
-            new_count = int(m.group(4)) if m.group(4) is not None else 1
-            hunks[current_file].append(
-                Hunk(
-                    file_path=current_file,
-                    base_start=base_start,
-                    base_count=base_count,
-                    new_start=new_start,
-                    new_count=new_count,
+            flush_pending_with_body()
+            pending.append(
+                (
+                    current_file,
+                    {
+                        "base_start": int(m.group(1)),
+                        "base_count": int(m.group(2)) if m.group(2) is not None else 1,
+                        "new_start": int(m.group(3)),
+                        "new_count": int(m.group(4)) if m.group(4) is not None else 1,
+                    },
                 )
             )
+            continue
+        # Body lines: must follow a hunk header and start with +, -, or space.
+        if pending and line[:1] in ("+", "-", " "):
+            # Skip the file headers that may appear at the start of bodies
+            # (defensive — shouldn't normally happen, but git can emit "\ No
+            # newline at end of file" markers which start with backslash).
+            current_body.append(line)
 
+    flush_pending_with_body()
     return hunks
 
 

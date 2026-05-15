@@ -35,7 +35,10 @@ def _repo_root(start: Path) -> Path | None:
 
 
 def _diff_text(repo: Path, base: str | None) -> str:
-    args = ["diff", "--no-color", "--unified=0"]
+    # --unified=3 merges adjacent hunks and gives reviewers context lines
+    # for grounding. Header line counts include the context — attribution
+    # is file-level so the wider window doesn't affect correctness.
+    args = ["diff", "--no-color", "--unified=3"]
     if base:
         args.append(base)
     code, out = _git(args, repo)

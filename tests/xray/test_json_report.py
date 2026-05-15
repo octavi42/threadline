@@ -51,6 +51,11 @@ def test_json_schema_shape():
         "base_count": 1,
         "new_start": 1,
         "new_count": 2,
+        "body": [
+            "-pass",
+            "+def hello():",
+            "+    return 'hi'",
+        ],
         "tests": [
             {
                 "tool": "Bash",

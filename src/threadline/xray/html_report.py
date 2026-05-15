@@ -27,6 +27,18 @@ def _status_class(exit_status: int | None) -> tuple[str, str]:
     return "unknown", "·"
 
 
+def _diff_line_html(line: str) -> str:
+    """Wrap a raw +/−/space diff line as a colored row."""
+    prefix = line[:1]
+    if prefix == "+":
+        css = "add"
+    elif prefix == "-":
+        css = "del"
+    else:
+        css = "ctx"
+    return f'<div class="diff-line {css}">{html.escape(line) or "&nbsp;"}</div>'
+
+
 _CSS = """
 :root {
   --bg: #0d1117;
@@ -118,6 +130,17 @@ main { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column;
 .test .cmd { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .test .out { color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty { color: var(--fg-muted); font-style: italic; font-size: 12px; padding: 0.3rem 0; }
+.diff {
+  font-family: var(--code); font-size: 11.5px; line-height: 1.45;
+  background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0.4rem 0;
+  margin: 0.5rem 0 0.7rem; overflow-x: auto;
+  white-space: pre;
+}
+.diff-line { padding: 0 0.7rem; }
+.diff-line.add { background: rgba(63,185,80,0.10); color: #7ee787; }
+.diff-line.del { background: rgba(248,81,73,0.10); color: #ffa198; }
+.diff-line.ctx { color: var(--fg-muted); }
 footer { max-width: 1100px; margin: 2rem auto 0; color: var(--fg-muted); font-size: 12px; text-align: center; }
 """
 
@@ -180,6 +203,14 @@ def render_html(
                     f'<div class="chips">{"".join(chips)}</div>' if chips else ""
                 )
 
+                if h.body:
+                    body_html = "".join(
+                        _diff_line_html(line) for line in h.body
+                    )
+                    diff_block = f'<div class="diff">{body_html}</div>'
+                else:
+                    diff_block = ""
+
                 if e.test_runs:
                     test_rows: list[str] = []
                     for t in e.test_runs:
@@ -202,7 +233,7 @@ def render_html(
                 hunk_blocks.append(
                     f'<div class="hunk">'
                     f'<div class="hunk-range">{html.escape(range_str)}</div>'
-                    f"{prompt_html}{chips_html}{tests_html}"
+                    f"{prompt_html}{chips_html}{diff_block}{tests_html}"
                     f"</div>"
                 )
 

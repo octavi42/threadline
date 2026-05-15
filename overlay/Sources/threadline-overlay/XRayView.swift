@@ -176,9 +176,63 @@ private struct HunkRow: View {
             Text("@@ +\(hunk.newStart),\(hunk.newCount) −\(hunk.baseStart),\(hunk.baseCount)")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.secondary)
+            if !hunk.body.isEmpty {
+                DiffBody(lines: hunk.body)
+            }
             ForEach(hunk.tests.indices, id: \.self) { i in
                 TestRow(test: hunk.tests[i])
             }
+        }
+    }
+}
+
+private struct DiffBody: View {
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines.indices, id: \.self) { i in
+                DiffLineRow(line: lines[i])
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.black.opacity(0.25))
+        .cornerRadius(5)
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color(white: 0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct DiffLineRow: View {
+    let line: String
+
+    var body: some View {
+        Text(line.isEmpty ? " " : line)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(textColor)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(rowBackground)
+            .textSelection(.enabled)
+    }
+
+    private var prefix: Character? { line.first }
+    private var textColor: Color {
+        switch prefix {
+        case "+": return Color(red: 0.49, green: 0.91, blue: 0.53)  // #7ee787
+        case "-": return Color(red: 1.00, green: 0.63, blue: 0.60)  // #ffa198
+        default:  return .secondary
+        }
+    }
+    private var rowBackground: Color {
+        switch prefix {
+        case "+": return Color(red: 0.25, green: 0.73, blue: 0.31).opacity(0.10)
+        case "-": return Color(red: 0.97, green: 0.32, blue: 0.29).opacity(0.10)
+        default:  return .clear
         }
     }
 }

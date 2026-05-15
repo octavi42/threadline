@@ -38,6 +38,10 @@ def test_html_is_self_contained_and_valid():
     assert "greet.py" in out
     assert "add a hello function to greet.py" in out
     assert "1× Edit" in out
+    # Diff body must render with line type classes.
+    assert 'class="diff-line add"' in out
+    assert 'class="diff-line del"' in out
+    assert "def hello():" in out
 
 
 def test_html_escapes_user_text():

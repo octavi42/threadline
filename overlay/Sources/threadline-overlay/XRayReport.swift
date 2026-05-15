@@ -55,14 +55,25 @@ struct XRayHunk: Codable, Hashable {
     let baseCount: Int
     let newStart: Int
     let newCount: Int
+    let body: [String]
     let tests: [XRayTest]
 
     enum CodingKeys: String, CodingKey {
-        case tests
+        case tests, body
         case baseStart = "base_start"
         case baseCount = "base_count"
         case newStart = "new_start"
         case newCount = "new_count"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.baseStart = try c.decode(Int.self, forKey: .baseStart)
+        self.baseCount = try c.decode(Int.self, forKey: .baseCount)
+        self.newStart = try c.decode(Int.self, forKey: .newStart)
+        self.newCount = try c.decode(Int.self, forKey: .newCount)
+        self.body = try c.decodeIfPresent([String].self, forKey: .body) ?? []
+        self.tests = try c.decode([XRayTest].self, forKey: .tests)
     }
 }
 

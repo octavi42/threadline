@@ -64,6 +64,7 @@ def report_dict(
                 "base_count": h.base_count,
                 "new_start": h.new_start,
                 "new_count": h.new_count,
+                "body": list(h.body),
                 "tests": [_test_to_dict(t) for t in e.test_runs],
             })
 
