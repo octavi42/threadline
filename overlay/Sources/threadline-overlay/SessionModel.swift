@@ -49,6 +49,16 @@ struct SourceSnapshot: Identifiable, Equatable {
     var sessionStart: Date?               // first record's timestamp
     /// The session's underlying JSONL path. Used by the summarizer.
     var jsonlPath: String?
+    /// Live process id for this agent when it is currently running.
+    var livePid: pid_t?
+    /// TTY for the shell that launched this agent, when the prompt hook has
+    /// reported it. Used for terminal-specific exact-tab focusing.
+    var tty: String?
+    var terminalBundleID: String?
+    var terminalPID: pid_t?
+    var terminalSurfaceID: String?
+    var terminalWindowID: String?
+    var terminalTabID: String?
 
     var projectName: String {
         guard let cwd = cwd, !cwd.isEmpty else { return "—" }
@@ -184,13 +194,32 @@ final class SessionModel: ObservableObject {
         // off LiveAgents.liveSessions(), which maps each live PID to its
         // own JSONL file (per-tab uniqueness).
         for session in LiveAgents.liveSessions() {
-            let snap: SourceSnapshot?
+            var snap: SourceSnapshot?
             switch session.tool {
             case "Claude": snap = ClaudeSource.snapshot(forJSONL: session.jsonlPath)
             case "Codex":  snap = CodexSource.snapshot(forJSONL: session.jsonlPath)
             default:       snap = nil
             }
-            if let s = snap { all.append(s) }
+            if var s = snap {
+                s.livePid = session.pid
+                if let shell = ShellRegistry.shared.shell(forDescendant: session.pid) {
+                    s.tty = shell.tty
+                    s.terminalBundleID = shell.terminal?.bundleID
+                    s.terminalPID = shell.terminal?.appPID
+                    s.terminalSurfaceID = shell.terminal?.surfaceID
+                    s.terminalWindowID = shell.terminal?.windowID
+                    s.terminalTabID = shell.terminal?.tabID
+                } else if let terminal = TerminalIdentityResolver.resolve(agentPid: session.pid,
+                                                                          cwd: s.cwd) {
+                    s.tty = terminal.tty
+                    s.terminalBundleID = terminal.bundleID
+                    s.terminalPID = terminal.appPID
+                    s.terminalSurfaceID = terminal.surfaceID
+                    s.terminalWindowID = terminal.windowID
+                    s.terminalTabID = terminal.tabID
+                }
+                all.append(s)
+            }
         }
 
         // Cursor has no per-workspace process, so we surface every workspace

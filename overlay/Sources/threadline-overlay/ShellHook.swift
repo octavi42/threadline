@@ -13,7 +13,7 @@ enum ShellHook {
         # Pings the threadline daemon on every prompt so the panel knows which
         # tab/cwd is focused. Drop-and-disown so it never slows a prompt down.
         __threadline_touch() {
-            "\(binaryPath)" touch --cwd "$PWD" --pid $$ >/dev/null 2>&1 &
+            "\(binaryPath)" touch --cwd "$PWD" --pid $$ --tty "$(tty 2>/dev/null || true)" >/dev/null 2>&1 &
             disown >/dev/null 2>&1 || true
         }
         if [ -n "${ZSH_VERSION:-}" ]; then

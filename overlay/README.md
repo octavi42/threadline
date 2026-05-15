@@ -41,6 +41,7 @@ threadline-overlay toggle    # enable/disable follow mode
 threadline-overlay show      # peek for 8s
 threadline-overlay hide      # disable follow + hide
 threadline-overlay refresh   # rescan session files now
+threadline-overlay jump      # focus the selected agent's terminal/editor
 threadline-overlay status    # daemon pid, panel frame, current anchor
 threadline-overlay quit      # stop daemon
 threadline-overlay uninstall # remove LaunchAgent + binary
@@ -62,10 +63,17 @@ __threadline_touch() {
 # <<< threadline-overlay <<<
 ```
 
-Each prompt pings the daemon with `(pid, cwd)`. The daemon walks the shell's
+Each prompt pings the daemon with `(pid, cwd, tty)`. The daemon walks the shell's
 parent chain via `sysctl(KERN_PROC_PID)` and finds which terminal app owns it.
 For the frontmost terminal, the most recently-touched shell's cwd becomes the
 scope; the source readers then filter to sessions matching that cwd.
+
+Press **Return** in the Threadline panel, or run `threadline-overlay jump`, to
+focus the selected session's owning terminal/editor. Ghostty records its exact
+terminal surface ID and focuses that surface. Terminal.app and iTerm2 try to
+select the exact tab by matching the recorded TTY. macOS may ask for Automation
+permission the first time one of these exact-focus paths runs. Other terminals
+fall back to activating the owning app/window.
 
 Result: switch tabs → next prompt in the focused tab updates the scope →
 panel flips. Open a new window → its first prompt registers. `uninstall`

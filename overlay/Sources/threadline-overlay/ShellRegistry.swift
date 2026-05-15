@@ -11,6 +11,8 @@ final class ShellRegistry {
     private struct Entry {
         let pid: pid_t
         let cwd: String
+        let tty: String?
+        let terminal: TerminalIdentity?
         let touchedAt: Date
     }
 
@@ -20,15 +22,27 @@ final class ShellRegistry {
     /// Entries older than this are pruned on each operation.
     private let ttl: TimeInterval = 30 * 60
 
-    func touch(pid: pid_t, cwd: String) {
+    func touch(pid: pid_t, cwd: String, tty: String? = nil) {
+        let normalizedTTY = TerminalIdentityResolver.normalizeTTY(tty)
+        let touchedAt = Date()
         lock.lock(); defer { lock.unlock() }
-        entries[pid] = Entry(pid: pid, cwd: cwd, touchedAt: Date())
+        entries[pid] = Entry(pid: pid,
+                             cwd: cwd,
+                             tty: normalizedTTY,
+                             terminal: nil,
+                             touchedAt: touchedAt)
         prune()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let terminal = TerminalIdentityResolver.resolve(shellPid: pid, cwd: cwd, tty: normalizedTTY)
+            self?.updateTerminal(pid: pid, touchedAt: touchedAt, terminal: terminal)
+        }
     }
 
     struct Scope {
         let shellPid: pid_t
         let cwd: String
+        let tty: String?
+        let terminal: TerminalIdentity?
     }
 
     /// The most recently-active shell descended from `terminalPid`.
@@ -39,7 +53,28 @@ final class ShellRegistry {
         let sorted = entries.values.sorted { $0.touchedAt > $1.touchedAt }
         for entry in sorted {
             if isDescendant(pid: entry.pid, ancestor: terminalPid) {
-                return Scope(shellPid: entry.pid, cwd: entry.cwd)
+                return Scope(shellPid: entry.pid,
+                             cwd: entry.cwd,
+                             tty: entry.tty,
+                             terminal: entry.terminal)
+            }
+        }
+        return nil
+    }
+
+    /// The most recent registered shell that is an ancestor of `pid`.
+    /// For an agent process, this usually resolves to the shell prompt that
+    /// launched it, giving us the TTY needed for exact tab focusing.
+    func shell(forDescendant pid: pid_t) -> Scope? {
+        lock.lock(); defer { lock.unlock() }
+        prune()
+        let sorted = entries.values.sorted { $0.touchedAt > $1.touchedAt }
+        for entry in sorted {
+            if isDescendant(pid: pid, ancestor: entry.pid) {
+                return Scope(shellPid: entry.pid,
+                             cwd: entry.cwd,
+                             tty: entry.tty,
+                             terminal: entry.terminal)
             }
         }
         return nil
@@ -53,6 +88,18 @@ final class ShellRegistry {
     func count() -> Int {
         lock.lock(); defer { lock.unlock() }
         return entries.count
+    }
+
+    private func updateTerminal(pid: pid_t, touchedAt: Date, terminal: TerminalIdentity?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let existing = entries[pid],
+              existing.touchedAt == touchedAt
+        else { return }
+        entries[pid] = Entry(pid: existing.pid,
+                             cwd: existing.cwd,
+                             tty: existing.tty,
+                             terminal: terminal,
+                             touchedAt: existing.touchedAt)
     }
 
     private func prune() {

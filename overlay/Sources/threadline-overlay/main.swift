@@ -7,7 +7,7 @@ let rest = Array(args.dropFirst())
 switch cmd {
 case "daemon":
     Daemon.run()
-case "toggle", "show", "hide", "quit", "status", "refresh", "list":
+case "toggle", "show", "hide", "quit", "status", "refresh", "list", "jump":
     CLI.send(cmd, args: rest)
 case "touch":
     CLI.touch(args: rest)
@@ -35,6 +35,7 @@ func printUsage() {
       show         peek for a few seconds
       hide         disable follow + hide
       refresh      force re-scan of session sources
+      jump         focus the selected agent's terminal/editor
       status       print daemon pid, panel frame, current anchor
       touch        register a shell's cwd with the daemon
                    (use --cwd PATH --pid PID; called from the shell prompt)

@@ -8,6 +8,7 @@ enum CLI {
     static func touch(args: [String]) {
         var cwd: String?
         var pid: Int?
+        var tty: String?
         var i = 0
         while i < args.count {
             let a = args[i]
@@ -15,7 +16,7 @@ enum CLI {
             switch a {
             case "--cwd": cwd = next; i += 2
             case "--pid": pid = next.flatMap(Int.init); i += 2
-            case "--tty": i += 2     // accepted but not used
+            case "--tty": tty = next; i += 2
             default:      i += 1
             }
         }
@@ -26,7 +27,8 @@ enum CLI {
         let fd = IPC.connect()
         if fd < 0 { return }
         defer { close(fd) }
-        let obj: [String: Any] = ["cwd": cwd, "pid": pid]
+        var obj: [String: Any] = ["cwd": cwd, "pid": pid]
+        if let tty = tty { obj["tty"] = tty }
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []),
               let json = String(data: data, encoding: .utf8) else { return }
         IPC.writeLine(fd, "touch \(json)")
@@ -72,15 +74,9 @@ enum CLI {
     }
 
     private static func spawnDaemon() -> Bool {
-        let exe = CommandLine.arguments[0]
-        // Resolve to absolute path so the spawn survives wherever we ran from.
-        let resolved = (exe as NSString).expandingTildeInPath
-        let fullPath: String
-        if resolved.hasPrefix("/") {
-            fullPath = resolved
-        } else {
-            let cwd = FileManager.default.currentDirectoryPath
-            fullPath = (cwd as NSString).appendingPathComponent(resolved)
+        guard let fullPath = Bundle.main.executablePath else {
+            FileHandle.standardError.write(Data("could not resolve executable path\n".utf8))
+            return false
         }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: fullPath)

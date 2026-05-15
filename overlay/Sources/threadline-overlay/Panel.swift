@@ -2,13 +2,26 @@ import AppKit
 import SwiftUI
 
 final class FloatingPanel: NSPanel {
+    var onReturnKey: (() -> Void)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func keyDown(with event: NSEvent) {
+        // Return and keypad Enter jump back to the selected agent. Keep this
+        // at the panel level so it works while focus is in the sidebar list.
+        if OverlayController.isBareReturn(event) {
+            onReturnKey?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 final class OverlayController {
     let panel: FloatingPanel
     let model: SessionModel
+    private var returnKeyMonitor: Any?
 
     private static let frameDefaultsKey = "threadline.panel.frame"
     private static let defaultSize = NSSize(width: 880, height: 520)
@@ -39,6 +52,24 @@ final class OverlayController {
         panel.delegate = OverlayController.persistenceDelegate
 
         self.panel = panel
+        panel.onReturnKey = { [weak self] in
+            _ = self?.jumpToSelection()
+        }
+        returnKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self,
+                  self.panel.isVisible,
+                  event.window === self.panel,
+                  Self.isBareReturn(event)
+            else { return event }
+            _ = self.jumpToSelection()
+            return nil
+        }
+    }
+
+    deinit {
+        if let monitor = returnKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     func toggle() {
@@ -61,10 +92,44 @@ final class OverlayController {
         panel.orderOut(nil)
     }
 
+    @discardableResult
+    func jumpToSelection() -> Bool {
+        guard let result = jumpResult() else {
+            NSSound.beep()
+            return false
+        }
+        persistFrame()
+        panel.orderOut(nil)
+        FileHandle.standardError.write(Data("jumped to \(result.appName) via \(result.detail)\n".utf8))
+        return true
+    }
+
+    func jumpToSelectionMessage() -> String {
+        guard let result = jumpResult() else {
+            NSSound.beep()
+            return "no jump target"
+        }
+        persistFrame()
+        panel.orderOut(nil)
+        return "jumped to \(result.appName) via \(result.detail)"
+    }
+
+    private func jumpResult() -> JumpBack.Result? {
+        if let snap = model.selectedSnapshot {
+            return JumpBack.jump(to: snap)
+        }
+        return JumpBack.jump(to: model.selectedFolder?.latestSnapshot)
+    }
+
     private func persistFrame() {
         let f = panel.frame
         UserDefaults.standard.set(NSStringFromRect(f),
                                   forKey: OverlayController.frameDefaultsKey)
+    }
+
+    fileprivate static func isBareReturn(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty &&
+        (event.keyCode == 36 || event.keyCode == 76)
     }
 
     // MARK: - frame persistence
