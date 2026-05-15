@@ -537,6 +537,12 @@ def main() -> int:
         help="Render a self-contained HTML report instead of plain text.",
     )
     xray_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_out",
+        help="Emit structured JSON for downstream consumers (Swift overlay, etc.).",
+    )
+    xray_parser.add_argument(
         "--out",
         default=None,
         help="Write the report to this file instead of stdout.",
@@ -568,7 +574,13 @@ def main() -> int:
     if args.command == "reset":
         return reset_command()
     if args.command == "xray":
-        return xray_command(base=args.base, session=args.session, html=args.html, out=args.out)
+        return xray_command(
+            base=args.base,
+            session=args.session,
+            html=args.html,
+            json_out=args.json_out,
+            out=args.out,
+        )
 
     parser.error(f"unknown command: {args.command}")
     return 2

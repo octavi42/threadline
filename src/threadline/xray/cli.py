@@ -18,6 +18,7 @@ from pathlib import Path
 from .events import Event, parse
 from .evidence import HunkEvidence, assemble
 from .html_report import render_html
+from .json_report import render_json
 from .mapper import attribute, parse_diff
 
 
@@ -124,6 +125,7 @@ def xray_command(
     base: str | None = None,
     session: str | None = None,
     html: bool = False,
+    json_out: bool = False,
     out: str | None = None,
 ) -> int:
     cwd = Path(os.getcwd()).resolve()
@@ -155,7 +157,14 @@ def xray_command(
     attrs = attribute(events, hunks, repo_root=str(repo))
     evidence = assemble(events, attrs)
 
-    if html:
+    if json_out:
+        output = render_json(
+            evidence,
+            repo=str(repo),
+            base=base or "HEAD",
+            session=str(session_path),
+        )
+    elif html:
         output = render_html(
             evidence,
             repo=str(repo),
