@@ -531,6 +531,16 @@ def main() -> int:
         default=None,
         help="Path to a Claude or Codex JSONL. Defaults to the newest Claude session for this repo.",
     )
+    xray_parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Render a self-contained HTML report instead of plain text.",
+    )
+    xray_parser.add_argument(
+        "--out",
+        default=None,
+        help="Write the report to this file instead of stdout.",
+    )
 
     args = parser.parse_args()
 
@@ -558,7 +568,7 @@ def main() -> int:
     if args.command == "reset":
         return reset_command()
     if args.command == "xray":
-        return xray_command(base=args.base, session=args.session)
+        return xray_command(base=args.base, session=args.session, html=args.html, out=args.out)
 
     parser.error(f"unknown command: {args.command}")
     return 2

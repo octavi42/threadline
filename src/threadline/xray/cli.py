@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .events import Event, parse
 from .evidence import HunkEvidence, assemble
+from .html_report import render_html
 from .mapper import attribute, parse_diff
 
 
@@ -119,7 +120,12 @@ def render(evidence: list[HunkEvidence]) -> str:
     return "\n".join(lines)
 
 
-def xray_command(base: str | None = None, session: str | None = None) -> int:
+def xray_command(
+    base: str | None = None,
+    session: str | None = None,
+    html: bool = False,
+    out: str | None = None,
+) -> int:
     cwd = Path(os.getcwd()).resolve()
     repo = _repo_root(cwd)
     if repo is None:
@@ -148,5 +154,20 @@ def xray_command(base: str | None = None, session: str | None = None) -> int:
     hunks = parse_diff(diff_text)
     attrs = attribute(events, hunks, repo_root=str(repo))
     evidence = assemble(events, attrs)
-    sys.stdout.write(render(evidence))
+
+    if html:
+        output = render_html(
+            evidence,
+            repo=str(repo),
+            base=base or "HEAD",
+            session=str(session_path),
+        )
+    else:
+        output = render(evidence)
+
+    if out:
+        Path(out).expanduser().write_text(output)
+        print(f"threadline xray: wrote {out}", file=sys.stderr)
+    else:
+        sys.stdout.write(output)
     return 0
