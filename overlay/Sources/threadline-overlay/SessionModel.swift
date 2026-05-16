@@ -271,9 +271,9 @@ final class SessionModel: ObservableObject {
         }
 
         // History rows from the Python snapshot store. Surfaces terminated
-        // sessions that produced at least one file snapshot in the last 24h,
+        // sessions that produced at least one file snapshot in the last 2h,
         // and aren't already in the live set above.
-        let historyCutoff = Date().addingTimeInterval(-24 * 3600)
+        let historyCutoff = Date().addingTimeInterval(-2 * 3600)
         let liveIDs = Set(all.map { $0.id })
         all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs))
 
