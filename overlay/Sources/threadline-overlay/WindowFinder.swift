@@ -4,8 +4,8 @@ import AppKit
 /// returns its on-screen bounds. Uses CGWindowListCopyWindowInfo which exposes
 /// owner PID and bounds without Accessibility or Screen Recording permission.
 struct WindowFinder {
-    /// Bundle IDs we treat as terminal-like surfaces worth anchoring to.
-    /// Order doesn't matter — we filter the frontmost app against this set.
+    /// Bundle IDs we treat as terminal/editor surfaces for shell scoping and
+    /// jump-back behavior. Order doesn't matter.
     static let targetBundleIDs: Set<String> = [
         "com.apple.Terminal",
         "com.googlecode.iterm2",

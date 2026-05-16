@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
 
-final class FloatingPanel: NSPanel {
+final class ThreadlineWindow: NSWindow {
     var onReturnKey: (() -> Void)?
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { true }
 
     override func keyDown(with event: NSEvent) {
         // Return and keypad Enter jump back to the selected agent. Keep this
@@ -19,7 +19,7 @@ final class FloatingPanel: NSPanel {
 }
 
 final class OverlayController {
-    let panel: FloatingPanel
+    let panel: ThreadlineWindow
     let model: SessionModel
     private var returnKeyMonitor: Any?
 
@@ -29,20 +29,18 @@ final class OverlayController {
     init(model: SessionModel) {
         self.model = model
         let initialFrame = OverlayController.restoredFrame()
-        let panel = FloatingPanel(
+        let panel = ThreadlineWindow(
             contentRect: initialFrame,
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         panel.title = "Threadline"
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.level = .normal
+        panel.collectionBehavior = [.fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
         panel.titlebarAppearsTransparent = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
 
         let host = NSHostingView(rootView: ContentView(model: model))
         host.translatesAutoresizingMaskIntoConstraints = false

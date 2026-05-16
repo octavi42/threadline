@@ -18,7 +18,7 @@ enum Daemon {
         }
 
         let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        app.setActivationPolicy(.regular)
 
         let m = SessionModel()
         m.start()
@@ -134,7 +134,7 @@ enum Daemon {
         case "status":
             let f = c.panel.frame
             let n = model?.snapshots.count ?? 0
-            return "running pid=\(getpid()) visible=\(c.panel.isVisible) panel=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n)"
+            return "running pid=\(getpid()) visible=\(c.panel.isVisible) window=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n)"
         case "quit":
             DispatchQueue.main.async {
                 NSApp.terminate(nil)

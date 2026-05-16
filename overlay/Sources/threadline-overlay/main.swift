@@ -25,21 +25,21 @@ default:
 
 func printUsage() {
     print("""
-    threadline-overlay — floating AI-session HUD
+    threadline-overlay — AI-session app
 
     USAGE:
       threadline-overlay <command>
 
     COMMANDS:
-      toggle       enable/disable follow mode
-      show         peek for a few seconds
-      hide         disable follow + hide
+      toggle       show or hide the Threadline window
+      show         show the Threadline window
+      hide         hide the Threadline window
       refresh      force re-scan of session sources
       jump         focus the selected agent's terminal/editor
-      status       print daemon pid, panel frame, current anchor
+      status       print daemon pid, window frame, and agent count
       touch        register a shell's cwd with the daemon
                    (use --cwd PATH --pid PID; called from the shell prompt)
-      daemon       run the panel daemon (foreground)
+      daemon       run the app daemon (foreground)
       install      install LaunchAgent + shell hook
       uninstall    remove LaunchAgent + shell hook
     """)

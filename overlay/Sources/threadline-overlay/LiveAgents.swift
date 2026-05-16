@@ -29,11 +29,13 @@ enum LiveAgents {
             let comm = ProcTable.commName(info)
             switch comm {
             case "claude", "claude.exe":
+                if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
                 guard let cwd = procCwd(pid: pid) else { continue }
                 claudeByCwd[cwd, default: []].append(
                     ClaudeProc(pid: pid, started: startTime(info: info))
                 )
             case "codex":
+                if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
                 for path in openJSONLPaths(pid: pid) where path.contains("/.codex/sessions/") {
                     if !usedPaths.contains(path) {
                         sessions.append(LiveSession(tool: "Codex", pid: pid, jsonlPath: path))
@@ -76,6 +78,24 @@ enum LiveAgents {
             }
         }
         return sessions
+    }
+
+    /// The overlay can spawn CLI helpers to summarize sessions. Those helpers
+    /// are not interactive agent tabs and must not be surfaced as live rows.
+    private static func isNonInteractiveHelper(pid: pid_t, comm: String) -> Bool {
+        let args = ProcTable.arguments(pid: pid)
+        if args.isEmpty { return false }
+
+        switch comm {
+        case "claude", "claude.exe":
+            return args.contains("-p")
+                || args.contains("--print")
+                || args.contains("--no-session-persistence")
+        case "codex":
+            return args.contains("exec")
+        default:
+            return false
+        }
     }
 
     /// Whether Cursor.app itself is running.

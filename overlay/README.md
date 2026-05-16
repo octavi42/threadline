@@ -1,7 +1,7 @@
 # threadline-overlay
 
-A small macOS floating panel that sits on top of every Space and shows the live
-context of your AI coding sessions: Claude Code, Codex CLI, and Cursor.
+A small macOS app window that shows the live context of your AI coding
+sessions: Claude Code, Codex CLI, and Cursor.
 
 ```
 ┌─ Threadline ───────────────────────────────────────── 15:23 ─┐
@@ -32,17 +32,17 @@ Recording.
 ## Use
 
 Default global hotkey: **⌃⌥⌘T** (Control + Option + Command + T) toggles the
-panel from anywhere. No permission prompt — it's registered via Carbon's
+window from anywhere. No permission prompt — it's registered via Carbon's
 `RegisterEventHotKey`. Override by setting `THREADLINE_HOTKEY` in the
 LaunchAgent environment (e.g. `ctrl+opt+cmd+\\`, `cmd+shift+f19`).
 
 ```bash
-threadline-overlay toggle    # enable/disable follow mode
-threadline-overlay show      # peek for 8s
-threadline-overlay hide      # disable follow + hide
+threadline-overlay toggle    # show/hide the app window
+threadline-overlay show      # show the app window
+threadline-overlay hide      # hide the app window
 threadline-overlay refresh   # rescan session files now
 threadline-overlay jump      # focus the selected agent's terminal/editor
-threadline-overlay status    # daemon pid, panel frame, current anchor
+threadline-overlay status    # daemon pid, window frame, agent count
 threadline-overlay quit      # stop daemon
 threadline-overlay uninstall # remove LaunchAgent + binary
 ```
@@ -68,7 +68,7 @@ parent chain via `sysctl(KERN_PROC_PID)` and finds which terminal app owns it.
 For the frontmost terminal, the most recently-touched shell's cwd becomes the
 scope; the source readers then filter to sessions matching that cwd.
 
-Press **Return** in the Threadline panel, or run `threadline-overlay jump`, to
+Press **Return** in the Threadline window, or run `threadline-overlay jump`, to
 focus the selected session's owning terminal/editor. Ghostty records its exact
 terminal surface ID and focuses that surface. Terminal.app and iTerm2 try to
 select the exact tab by matching the recorded TTY. macOS may ask for Automation
@@ -76,26 +76,11 @@ permission the first time one of these exact-focus paths runs. Other terminals
 fall back to activating the owning app/window.
 
 Result: switch tabs → next prompt in the focused tab updates the scope →
-panel flips. Open a new window → its first prompt registers. `uninstall`
+window context updates. Open a new window → its first prompt registers. `uninstall`
 strips the marker block.
 
 Falls back to global newest when no touch matches (e.g. no shell hook
 installed, or focused window is Cursor/VS Code).
-
-## How it follows the terminal
-
-When follow mode is on, the daemon polls the frontmost app at 15 Hz. If it's
-a known terminal (Terminal.app, iTerm2, Ghostty, Warp, Alacritty, kitty,
-WezTerm, Hyper, Tabby) or a known editor (Cursor, VS Code), the panel is
-re-pinned to that window's top edge with matching width. Anywhere else
-frontmost → panel hides until you switch back.
-
-The window geometry comes from `CGWindowListCopyWindowInfo`, which exposes
-owner PID and bounds without prompting for Accessibility, Input Monitoring,
-or Screen Recording.
-
-Add a terminal not listed above by editing the `targetBundleIDs` set in
-`Sources/threadline-overlay/WindowFinder.swift`.
 
 ## What it reads
 
@@ -109,33 +94,29 @@ Add a terminal not listed above by editing the `targetBundleIDs` set in
 
 Sources are re-scanned every 3 seconds.
 
-## How the float works
+## How the window works
 
-`NSPanel` with `styleMask: [.nonactivatingPanel, .hudWindow, .utilityWindow,
-.titled, .fullSizeContentView, .resizable]`, `level = .statusBar`, and
-`collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]`.
-The panel never steals focus from your terminal / editor.
-
-`show` dismisses on the next app switch (via `NSWorkspace` activation
-notifications — no permission) or after an 8-second safety timeout.
+The UI is a regular resizable macOS `NSWindow` with a normal window level. It
+opens at the last saved size and position, or centered on the main screen the
+first time. It does not pin itself to the top of another app and it does not
+join every Space.
 
 ## Architecture
 
 ```
 threadline-overlay (single binary)
 ├── CLI mode      : short-lived, sends a 1-line command over a Unix socket
-└── daemon mode   : NSApp + NSPanel + socket listener at ~/.threadline/overlay.sock
+└── daemon mode   : NSApp + NSWindow + socket listener at ~/.threadline/overlay.sock
                     ├── SessionModel (Combine, 3s poll)
                     │     ├── ClaudeSource  (~/.claude/projects/*.jsonl)
                     │     ├── CodexSource   (~/.codex/sessions/**/*.jsonl)
                     │     └── CursorSource  (workspaceStorage state.vscdb)
-                    └── OverlayController (NSPanel + show/hide/show-once)
+                    └── OverlayController (NSWindow + show/hide)
 ```
 
 ## Roadmap
 
 - Parse Cursor `cursorDiskKV` bubbles for real chat text.
-- Drag-to-reposition + persisted frame.
 - Token/usage display per source.
 - Optional: hook into the existing Python `threadline` CLI for PTY-recorded
   shell context.

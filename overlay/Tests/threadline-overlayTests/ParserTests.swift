@@ -102,6 +102,15 @@ final class CodexSourceTests: XCTestCase {
         }
 
         XCTAssertEqual(snap.lastText, "On it — adding /auth/logout to the router.")
+        XCTAssertEqual(snap.filesEdited, ["/Users/test/proj/auth.swift",
+                                          "/Users/test/proj/router.swift"])
+        XCTAssertEqual(snap.toolCallCounts["apply_patch"], 1)
+        XCTAssertEqual(snap.linesAdded, 2)
+        XCTAssertEqual(snap.linesRemoved, 1)
+
+        let routerGroup = snap.fileChanges.first { $0.path == "/Users/test/proj/router.swift" }
+        XCTAssertEqual(routerGroup?.edits.first?.tool, "apply_patch")
+        XCTAssertTrue(routerGroup?.edits.first?.patchText.contains("/auth/logout") == true)
     }
 }
 

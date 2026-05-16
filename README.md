@@ -3,7 +3,7 @@
 Threadline has two pieces:
 
 1. **`threadline` (Python)** — records a terminal session and summarizes the current work thread.
-2. **`threadline-overlay` (Swift, macOS)** — a floating HUD that sits on top of every Space and shows live context from your Claude Code, Codex CLI, and Cursor sessions. See [`overlay/README.md`](overlay/README.md).
+2. **`threadline-overlay` (Swift, macOS)** — a small app window that shows live context from your Claude Code, Codex CLI, and Cursor sessions. See [`overlay/README.md`](overlay/README.md).
 
 ---
 

@@ -52,4 +52,38 @@ enum ProcTable {
         }
         return idx
     }
+
+    static func arguments(pid: pid_t) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else {
+            return []
+        }
+
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctl(&mib, u_int(mib.count), &buffer, &size, nil, 0) == 0 else {
+            return []
+        }
+        if size < MemoryLayout<Int32>.size { return [] }
+
+        let argc = buffer.withUnsafeBytes { raw -> Int32 in
+            raw.load(as: Int32.self)
+        }
+        if argc <= 0 { return [] }
+
+        var offset = MemoryLayout<Int32>.size
+        while offset < size && buffer[offset] != 0 { offset += 1 } // executable path
+        while offset < size && buffer[offset] == 0 { offset += 1 }
+
+        var args: [String] = []
+        while offset < size && args.count < Int(argc) {
+            let start = offset
+            while offset < size && buffer[offset] != 0 { offset += 1 }
+            if offset > start {
+                args.append(String(cString: Array(buffer[start..<offset]) + [0]))
+            }
+            while offset < size && buffer[offset] == 0 { offset += 1 }
+        }
+        return args
+    }
 }

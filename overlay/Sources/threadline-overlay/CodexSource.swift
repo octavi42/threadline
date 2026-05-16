@@ -74,7 +74,7 @@ enum CodexSource {
         snap.updatedAt = mtime
         snap.cwd = knownCwd
 
-        guard let tail = tailOfFile(path: url.path, maxBytes: 64 * 1024) else { return snap }
+        guard let text = try? String(contentsOfFile: url.path, encoding: .utf8) else { return snap }
 
         var model: String?
         var contextLimit: Int?
@@ -84,8 +84,17 @@ enum CodexSource {
         var sawStartedAfterComplete = false
         var userTurns = 0
         var assistantTurns = 0
+        var editSeq = 0
+        var pendingPatchInputs: [String: String] = [:]
+        var editsByFile: [String: [FileEditOp]] = [:]
+        var filesEditedOrder: [String] = []
+        var filesEditedSeen: Set<String> = []
+        var toolCounts: [String: Int] = [:]
+        var toolTokens: [String: Int] = [:]
+        var linesAdded = 0
+        var linesRemoved = 0
 
-        for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
                   let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
@@ -112,7 +121,8 @@ enum CodexSource {
                     if i + c + o > 0 { lastTokenUsage = (i, c, o) }
                 }
             case "response_item":
-                if payload["type"] as? String == "message" {
+                let ptype = payload["type"] as? String
+                if ptype == "message" {
                     let role = payload["role"] as? String
                     let content = payload["content"] as? [[String: Any]] ?? []
                     let text = content.compactMap { $0["text"] as? String }.joined(separator: " ")
@@ -120,8 +130,51 @@ enum CodexSource {
                         if role == "assistant" { lastAssistant = text; assistantTurns += 1 }
                         else if role == "user" { lastUser = text; userTurns += 1 }
                     }
+                } else if ptype == "custom_tool_call" {
+                    let name = payload["name"] as? String ?? ""
+                    guard !name.isEmpty else { break }
+                    toolCounts[name, default: 0] += 1
+                    if let rawInput = payload["input"] as? String {
+                        toolTokens[name, default: 0] += estimateTokens(rawInput)
+                        if name == "apply_patch", let callID = payload["call_id"] as? String {
+                            pendingPatchInputs[callID] = rawInput
+                        }
+                    }
                 }
             default: break
+            }
+        }
+
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = String(raw).data(using: .utf8),
+                  let rec = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  rec["type"] as? String == "event_msg",
+                  let payload = rec["payload"] as? [String: Any],
+                  payload["type"] as? String == "patch_apply_end",
+                  let callID = payload["call_id"] as? String
+            else { continue }
+
+            let changes = payload["changes"] as? [String: Any] ?? [:]
+            let fallbackPatch = pendingPatchInputs[callID] ?? ""
+            for (path, rawChange) in changes.sorted(by: { $0.key < $1.key }) {
+                let change = rawChange as? [String: Any] ?? [:]
+                let patch = (change["unified_diff"] as? String) ?? patchForPath(path, in: fallbackPatch)
+                let counts = countPatchLines(patch)
+                editSeq += 1
+                let op = FileEditOp(seq: editSeq,
+                                    tool: "apply_patch",
+                                    timestamp: rec["timestamp"] as? String ?? "",
+                                    patchText: truncate(patch),
+                                    note: change["type"] as? String ?? "",
+                                    rawLinesAdded: counts.added,
+                                    rawLinesRemoved: counts.removed)
+                editsByFile[path, default: []].append(op)
+                if !filesEditedSeen.contains(path) {
+                    filesEditedSeen.insert(path)
+                    filesEditedOrder.append(path)
+                }
+                linesAdded += counts.added
+                linesRemoved += counts.removed
             }
         }
 
@@ -143,11 +196,59 @@ enum CodexSource {
         }
         snap.userTurns = userTurns
         snap.assistantTurns = assistantTurns
+        snap.filesEdited = filesEditedOrder
+        snap.toolCallCounts = toolCounts
+        snap.toolTokenEstimate = toolTokens
+        snap.linesAdded = linesAdded
+        snap.linesRemoved = linesRemoved
+        snap.fileChanges = filesEditedOrder.map { path in
+            FileChangeGroup(path: path, edits: editsByFile[path] ?? [])
+        }
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let birth = attrs[.creationDate] as? Date {
             snap.sessionStart = birth
         }
         snap.jsonlPath = url.path
         return snap
+    }
+
+    private static func estimateTokens(_ text: String) -> Int {
+        max(1, text.utf8.count / 4)
+    }
+
+    private static func countPatchLines(_ patch: String) -> (added: Int, removed: Int) {
+        var added = 0
+        var removed = 0
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+") && !line.hasPrefix("+++") { added += 1 }
+            else if line.hasPrefix("-") && !line.hasPrefix("---") { removed += 1 }
+        }
+        return (added, removed)
+    }
+
+    private static func truncate(_ s: String, max: Int = 4096) -> String {
+        if s.count <= max { return s }
+        return String(s.prefix(max)) + "\n… (\(s.count - max) chars truncated)"
+    }
+
+    private static func patchForPath(_ path: String, in patch: String) -> String {
+        guard !patch.isEmpty else { return "" }
+        var out: [String] = []
+        var capturing = false
+        let markers = [
+            "*** Update File: \(path)",
+            "*** Add File: \(path)",
+            "*** Delete File: \(path)",
+            "*** Update File: \((path as NSString).lastPathComponent)",
+        ]
+        for line in patch.components(separatedBy: "\n") {
+            if markers.contains(line) {
+                capturing = true
+                continue
+            }
+            if line.hasPrefix("*** ") && capturing { break }
+            if capturing { out.append(line) }
+        }
+        return out.joined(separator: "\n")
     }
 }

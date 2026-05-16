@@ -41,5 +41,5 @@ esac
 
 echo
 echo "done."
-echo "  threadline-overlay show     # one-shot peek"
+echo "  threadline-overlay show     # show the app window"
 echo "  threadline-overlay toggle   # show/hide"
