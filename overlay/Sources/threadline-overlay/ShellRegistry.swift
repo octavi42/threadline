@@ -22,6 +22,15 @@ final class ShellRegistry {
     /// Entries older than this are pruned on each operation.
     private let ttl: TimeInterval = 30 * 60
 
+    private var storePath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/.threadline/shells.json"
+    }
+
+    private init() {
+        loadPersisted()
+    }
+
     func touch(pid: pid_t, cwd: String, tty: String? = nil) {
         let normalizedTTY = TerminalIdentityResolver.normalizeTTY(tty)
         let touchedAt = Date()
@@ -32,6 +41,7 @@ final class ShellRegistry {
                              terminal: nil,
                              touchedAt: touchedAt)
         prune()
+        savePersisted()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let terminal = TerminalIdentityResolver.resolve(shellPid: pid, cwd: cwd, tty: normalizedTTY)
             self?.updateTerminal(pid: pid, touchedAt: touchedAt, terminal: terminal)
@@ -105,6 +115,46 @@ final class ShellRegistry {
     private func prune() {
         let cutoff = Date().addingTimeInterval(-ttl)
         entries = entries.filter { $0.value.touchedAt >= cutoff }
+    }
+
+    private func loadPersisted() {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: storePath)),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return }
+        let cutoff = Date().addingTimeInterval(-ttl)
+        for item in arr {
+            guard let pidNum = item["pid"] as? Int,
+                  let cwd = item["cwd"] as? String,
+                  let touchedAtSec = item["touched_at"] as? Double
+            else { continue }
+            let touchedAt = Date(timeIntervalSince1970: touchedAtSec)
+            guard touchedAt >= cutoff else { continue }
+            let pid = pid_t(pidNum)
+            entries[pid] = Entry(pid: pid,
+                                 cwd: cwd,
+                                 tty: item["tty"] as? String,
+                                 terminal: nil,
+                                 touchedAt: touchedAt)
+        }
+    }
+
+    private func savePersisted() {
+        let dir = (storePath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir,
+                                                 withIntermediateDirectories: true)
+        let arr = entries.values.map { entry -> [String: Any] in
+            var item: [String: Any] = [
+                "pid": Int(entry.pid),
+                "cwd": entry.cwd,
+                "touched_at": entry.touchedAt.timeIntervalSince1970,
+            ]
+            if let tty = entry.tty { item["tty"] = tty }
+            return item
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: arr, options: []) else {
+            return
+        }
+        try? data.write(to: URL(fileURLWithPath: storePath), options: .atomic)
     }
 
     // MARK: - process tree walk

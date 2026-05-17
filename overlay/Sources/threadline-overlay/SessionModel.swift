@@ -376,4 +376,51 @@ final class SessionModel: ObservableObject {
         guard let snap = selectedSnapshot else { return }
         kickoffSummary(for: snap)
     }
+
+    @discardableResult
+    func selectFolder(cwd: String) -> Bool {
+        let target = normalizedCwd(cwd)
+        guard let folder = folders.first(where: { normalizedCwd($0.cwd) == target }) else {
+            return false
+        }
+        selectedID = folder.selectionID
+        return true
+    }
+
+    @discardableResult
+    func selectSnapshot(cwd: String, tool: String? = nil) -> Bool {
+        let target = normalizedCwd(cwd)
+        guard let snap = snapshots.first(where: { snap in
+            normalizedCwd(snap.cwd) == target && (tool == nil || snap.tool == tool)
+        }) else {
+            return selectFolder(cwd: cwd)
+        }
+        selectedID = snap.id
+        return true
+    }
+
+    @discardableResult
+    func selectSnapshot(scope: ShellRegistry.Scope) -> Bool {
+        let target = normalizedCwd(scope.cwd)
+        let normalizedTTY = TerminalIdentityResolver.normalizeTTY(scope.tty)
+        let snap = snapshots.first { snap in
+            normalizedCwd(snap.cwd) == target &&
+            snap.terminalPID == scope.terminal?.appPID &&
+            snap.terminalSurfaceID != nil &&
+            snap.terminalSurfaceID == scope.terminal?.surfaceID
+        } ?? snapshots.first { snap in
+            normalizedCwd(snap.cwd) == target &&
+            normalizedTTY != nil &&
+            TerminalIdentityResolver.normalizeTTY(snap.tty) == normalizedTTY
+        } ?? snapshots.first { snap in
+            normalizedCwd(snap.cwd) == target &&
+            snap.livePid.map { ShellRegistry.shared.isDescendantOf(pid: $0, ancestor: scope.shellPid) } == true
+        }
+
+        guard let snap = snap else {
+            return selectFolder(cwd: scope.cwd)
+        }
+        selectedID = snap.id
+        return true
+    }
 }

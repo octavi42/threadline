@@ -90,7 +90,7 @@ enum Daemon {
             return
         }
         DispatchQueue.main.async {
-            let reply = dispatch(cmd: cmd)
+            let reply = dispatch(cmd: cmd, rest: rest)
             IPC.writeLine(client, reply)
             close(client)
         }
@@ -106,13 +106,20 @@ enum Daemon {
         ShellRegistry.shared.touch(pid: pid_t(pidNum), cwd: cwd, tty: obj["tty"] as? String)
     }
 
-    private static func dispatch(cmd: String) -> String {
+    private static func dispatch(cmd: String, rest: String = "") -> String {
         guard let c = controller else { return "no controller" }
         switch cmd {
         case "toggle":
+            if let cwd = cwdArg(rest) { _ = c.focus(cwd: cwd) }
             c.toggle();   return "ok"
         case "show":
+            if let cwd = cwdArg(rest) { _ = c.focus(cwd: cwd) }
             c.show();     return "ok"
+        case "focus":
+            if let cwd = cwdArg(rest) {
+                return c.focus(cwd: cwd) ? "selected \(cwd)" : "no folder for \(cwd)"
+            }
+            return c.focusFrontmostTerminalMessage()
         case "hide":
             c.hide();     return "ok"
         case "refresh":
@@ -134,7 +141,11 @@ enum Daemon {
         case "status":
             let f = c.panel.frame
             let n = model?.snapshots.count ?? 0
-            return "running pid=\(getpid()) visible=\(c.panel.isVisible) window=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n)"
+            let selected = model?.selectedSnapshot?.cwd
+                ?? model?.selectedFolder?.cwd
+                ?? "none"
+            let selectedKind = model?.selectedSnapshot?.badge ?? "folder"
+            return "running pid=\(getpid()) visible=\(c.panel.isVisible) window=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n) selected=\(selectedKind):\(selected)"
         case "quit":
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
@@ -143,5 +154,11 @@ enum Daemon {
         default:
             return "unknown: \(cmd)"
         }
+    }
+
+    private static func cwdArg(_ rest: String) -> String? {
+        guard rest.hasPrefix("--cwd ") else { return nil }
+        let raw = String(rest.dropFirst("--cwd ".count))
+        return raw.isEmpty ? nil : raw
     }
 }

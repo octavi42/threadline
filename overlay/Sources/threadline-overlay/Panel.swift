@@ -71,7 +71,9 @@ final class OverlayController {
     }
 
     func toggle() {
-        if panel.isVisible {
+        _ = focusFrontmostTerminalContext()
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if panel.isVisible && frontmostPID == getpid() {
             persistFrame()
             panel.orderOut(nil)
         } else {
@@ -81,8 +83,17 @@ final class OverlayController {
     }
 
     func show() {
+        _ = focusFrontmostTerminalContext()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func focus(cwd: String) -> Bool {
+        model.selectFolder(cwd: cwd)
+    }
+
+    func focusFrontmostTerminalMessage() -> String {
+        focusFrontmostTerminalContext()
     }
 
     func hide() {
@@ -117,6 +128,22 @@ final class OverlayController {
             return JumpBack.jump(to: snap)
         }
         return JumpBack.jump(to: model.selectedFolder?.latestSnapshot)
+    }
+
+    @discardableResult
+    private func focusFrontmostTerminalContext() -> String {
+        guard let target = WindowFinder.frontmostTarget() else { return "no frontmost target" }
+        if let scope = ShellRegistry.shared.scope(terminalPid: target.pid) {
+            return model.selectSnapshot(scope: scope)
+                ? "selected \(scope.cwd) via touch"
+                : "no session for touched cwd \(scope.cwd)"
+        }
+        if let match = ShellDiscovery.activeMatches(under: target.pid).first {
+            return model.selectSnapshot(cwd: match.cwd, tool: match.activeTool)
+                ? "selected \(match.cwd) via \(match.activeTool)"
+                : "no snapshot for discovered cwd \(match.cwd)"
+        }
+        return "no shell scope for \(target.appName) pid=\(target.pid)"
     }
 
     private func persistFrame() {

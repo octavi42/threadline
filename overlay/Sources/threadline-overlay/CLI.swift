@@ -62,7 +62,12 @@ enum CLI {
         }
         defer { close(fd) }
         var payload = cmd
-        if !args.isEmpty { payload += " " + args.joined(separator: " ") }
+        var sendArgs = args
+        if (cmd == "show" || cmd == "toggle"),
+           !sendArgs.contains("--cwd") {
+            sendArgs.append(contentsOf: ["--cwd", FileManager.default.currentDirectoryPath])
+        }
+        if !sendArgs.isEmpty { payload += " " + sendArgs.joined(separator: " ") }
         IPC.writeLine(fd, payload)
         // `list` returns multi-line output; everything else is one line. Use
         // readAll so multi-line replies aren't truncated.
