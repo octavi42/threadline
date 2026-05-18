@@ -193,20 +193,6 @@ private struct FolderHeader: View {
     }
 }
 
-private struct FolderStateDots: View {
-    let snapshots: [SourceSnapshot]
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(snapshots.prefix(3).enumerated()), id: \.offset) { _, snap in
-                StateDot(state: snap.state)
-                    .frame(width: 6, height: 6)
-            }
-        }
-        .frame(width: 22, alignment: .leading)
-    }
-}
-
 private struct AgentRow: View {
     let snap: SourceSnapshot
     let summary: String?
@@ -269,9 +255,7 @@ private struct DetailsPane: View {
     var body: some View {
         if let snap = model.selectedSnapshot {
             VStack(alignment: .leading, spacing: 0) {
-                DetailHeader(snap: snap,
-                             workState: model.workStates[snap.id] ?? snap.workState,
-                             onJump: onJump)
+                DetailHeader(snap: snap, onJump: onJump)
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
                     .padding(.bottom, 10)
@@ -346,7 +330,6 @@ private struct FolderDetailHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                FolderStateDots(snapshots: folder.snapshots)
                 Text(folder.name)
                     .font(.system(size: 20, weight: .semibold, design: .monospaced))
                 Spacer()
@@ -533,15 +516,10 @@ private struct FolderFilesView: View {
 
 private struct DetailHeader: View {
     let snap: SourceSnapshot
-    let workState: WorkState
     let onJump: (SourceSnapshot) -> Void
     var body: some View {
-        let work = workState
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Circle()
-                    .fill(workStatusColor(work.status))
-                    .frame(width: 10, height: 10)
                 Text(snap.tool)
                     .font(.system(size: 20, weight: .semibold))
                 Text(snap.projectName)
@@ -1176,26 +1154,6 @@ private struct SummaryView: View {
 }
 
 // MARK: - shared primitives
-
-struct StateDot: View {
-    let state: SourceState
-    var body: some View {
-        Circle().fill(fill).overlay(strokeOverlay)
-    }
-    private var fill: Color {
-        switch state {
-        case .running:  return Color(red: 1.0, green: 0.78, blue: 0.10)
-        case .awaiting: return Color(red: 1.0, green: 0.50, blue: 0.10)
-        case .idle:     return Color(red: 0.30, green: 0.85, blue: 0.45)
-        case .error:    return Color(red: 1.0, green: 0.30, blue: 0.30)
-        case .stale:    return Color(white: 0.35)
-        case .none:     return .clear
-        }
-    }
-    @ViewBuilder private var strokeOverlay: some View {
-        if state == .none { Circle().stroke(Color(white: 0.4), lineWidth: 1) }
-    }
-}
 
 struct BadgeView: View {
     let label: String
