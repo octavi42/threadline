@@ -124,19 +124,16 @@ private struct AgentsList: View {
                     set: { model.selectedID = $0 })) {
                         ForEach(model.folders) { folder in
                             Section {
+                                FolderHeader(folder: folder)
+                                    .padding(.leading, 4)
+                                    .contentShape(Rectangle())
+                                    .tag(folder.selectionID)
                                 ForEach(folder.snapshots) { snap in
                                     AgentRow(snap: snap,
                                              summary: model.summaries[snap.id],
                                              workState: model.workStates[snap.id])
                                         .tag(snap.id)
                                 }
-                            } header: {
-                                FolderHeader(folder: folder)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        model.selectedID = folder.selectionID
-                                    }
-                                    .tag(folder.selectionID)
                             }
                         }
                 }

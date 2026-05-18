@@ -201,6 +201,24 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.status, .done)
     }
 
+    func testExitCode10IsNotFailedTests() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Process finished with exit code 10."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertNotEqual(work.status, .testsFailed)
+    }
+
+    func testExitCode1IsFailedTests() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Command failed with exit code: 1"
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .testsFailed)
+    }
+
     func testChangelogMentionOfRepeatedEditsIsNotStuck() {
         var snap = baseSnapshot(state: .stale)
         snap.lastText = """

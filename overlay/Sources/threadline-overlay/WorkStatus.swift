@@ -22,6 +22,9 @@ struct WorkState: Equatable {
 }
 
 enum WorkStatusResolver {
+    private static let transcriptCacheLock = NSLock()
+    private static var transcriptCache: [String: (mtime: Date, text: String?)] = [:]
+
     /// Snapshot metadata plus recent JSONL transcript text used for tagging.
     static func evidenceText(for snap: SourceSnapshot) -> String {
         var parts = [searchableText(snap)]
@@ -154,6 +157,28 @@ enum WorkStatusResolver {
     /// Human-readable lines from the JSONL tail (messages + test-related tool output).
     private static func transcriptEvidence(fromJSONL path: String,
                                            maxBytes: Int = 96 * 1024) -> String? {
+        guard let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        else {
+            return parseTranscriptEvidence(fromJSONL: path, maxBytes: maxBytes)
+        }
+
+        transcriptCacheLock.lock()
+        if let hit = transcriptCache[path], hit.mtime == mtime {
+            let cached = hit.text
+            transcriptCacheLock.unlock()
+            return cached
+        }
+        transcriptCacheLock.unlock()
+
+        let parsed = parseTranscriptEvidence(fromJSONL: path, maxBytes: maxBytes)
+        transcriptCacheLock.lock()
+        transcriptCache[path] = (mtime, parsed)
+        transcriptCacheLock.unlock()
+        return parsed
+    }
+
+    private static func parseTranscriptEvidence(fromJSONL path: String,
+                                                maxBytes: Int) -> String? {
         guard let tail = tailOfFile(path: path, maxBytes: maxBytes) else { return nil }
         var snippets: [String] = []
 
@@ -268,10 +293,20 @@ enum WorkStatusResolver {
             "pytest failed", "npm test failed", "npm run test failed",
             "yarn test failed", "swift test failed", "go test failed",
             "cargo test failed", "vitest failed", "jest failed",
-            "exit code 1", "exit status 1",
             "\"conclusion\":\"failure\"", "\"conclusion\": \"failure\"",
         ]
-        return phrases.contains { text.contains($0) }
+        if phrases.contains(where: { text.contains($0) }) { return true }
+        return matchesNonZeroExitFailure(text)
+    }
+
+    /// Match exit code/status 1 without false positives like "exit code 10".
+    private static func matchesNonZeroExitFailure(_ text: String) -> Bool {
+        let patterns = [
+            #"exit\s+code\s*[:=]?\s*1\b"#,
+            #"exit\s+status\s*[:=]?\s*1\b"#,
+            #"exited\s+with\s+1\b"#,
+        ]
+        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
     }
 
     private static func hasPassedTestSignal(_ text: String) -> Bool {
