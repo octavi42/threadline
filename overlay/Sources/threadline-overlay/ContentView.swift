@@ -183,6 +183,7 @@ private struct AgentsList: View {
                                              workState: model.workState(for: snap))
                                         .padding(.leading, 12)
                                         .padding(.top, index == 0 ? 6 : 2)
+                                        .padding(.bottom, index == folder.snapshots.count - 1 ? 10 : 0)
                                         .tag(snap.id)
                                 }
                             }
@@ -223,14 +224,7 @@ private struct FolderSidebarRow: View {
         }
         .padding(.leading, 4)
         .padding(.top, 2)
-        .padding(.bottom, isExpanded ? 8 : 2)
-        .overlay(alignment: .bottom) {
-            if isExpanded {
-                Divider()
-                    .opacity(0.45)
-                    .padding(.leading, 18)
-            }
-        }
+        .padding(.bottom, isExpanded ? 4 : 2)
     }
 }
 
