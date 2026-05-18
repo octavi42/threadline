@@ -138,5 +138,4 @@ Configure via environment or `~/.threadline/config.json`:
 
 - Parse Cursor `cursorDiskKV` bubbles for real chat text.
 - Token/usage display per source.
-- Optional: hook into the existing Python `threadline` CLI for PTY-recorded
-  shell context.
+- Native diff-to-prompt attribution (X-Ray) in the overlay.

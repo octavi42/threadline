@@ -971,7 +971,6 @@ private struct FilesView: View {
     @ObservedObject var model: SessionModel
     let snap: SourceSnapshot
     @State private var showAllFiles = false
-    @State private var xrayExpanded = false
 
     private static let defaultVisibleFiles = 15
 
@@ -1063,16 +1062,6 @@ private struct FilesView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
-            }
-            DisclosureGroup(isExpanded: $xrayExpanded) {
-                if xrayExpanded {
-                    XRayView(snap: snap)
-                }
-            } label: {
-                Text("X-RAY ANALYSIS")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .tracking(0.5)
-                    .foregroundColor(.secondary)
             }
         }
     }

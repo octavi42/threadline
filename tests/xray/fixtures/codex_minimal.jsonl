@@ -1,8 +1,0 @@
-{"timestamp":"2026-05-15T11:00:00.000Z","type":"session_meta","payload":{"id":"sess_1","cwd":"/repo","git":{"branch":"main"},"model_provider":"openai"}}
-{"timestamp":"2026-05-15T11:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":"2026-05-15T11:00:01.000Z"}}
-{"timestamp":"2026-05-15T11:00:02.000Z","type":"response_item","payload":{"type":"user_message","text":"add hello function","message":"add hello function"}}
-{"timestamp":"2026-05-15T11:00:03.000Z","type":"response_item","payload":{"type":"function_call","call_id":"call_a","name":"exec_command","arguments":"{\"cmd\":\"ls\",\"workdir\":\"/repo\"}"}}
-{"timestamp":"2026-05-15T11:00:04.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_a","output":"{\"output\":\"greet.py\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.01}}"}}
-{"timestamp":"2026-05-15T11:00:05.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_b","name":"apply_patch","input":"*** Begin Patch\n*** Update File: /repo/greet.py\n@@\n-pass\n+def hello():\n+    return 'hi'\n*** End Patch","status":"completed"}}
-{"timestamp":"2026-05-15T11:00:06.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_b","output":"{\"output\":\"Success.\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":0.01}}"}}
-{"timestamp":"2026-05-15T11:00:07.000Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call_b","success":true,"stdout":"Success.","stderr":"","turn_id":"t1","status":"completed","changes":{"/repo/greet.py":{"type":"update","content":"def hello():\n    return 'hi'\n"}}}}

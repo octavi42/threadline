@@ -534,11 +534,6 @@ final class SessionModel: ObservableObject {
             return s
         }
 
-        let historyCutoff = Date().addingTimeInterval(-2 * 3600)
-        let liveIDs = Set(all.map { $0.id })
-        all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs)
-            .map(SourceSnapshot.withDerivedFields))
-
         all = all.filter(WorkStatusResolver.shouldDisplay)
         all.sort(by: WorkStatusResolver.sort)
         return all

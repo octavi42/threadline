@@ -414,7 +414,7 @@ final class Summarizer {
             "maximum 12 words",
             "classify the session from stdin",
             "uses your installed `claude -p`",
-            "threadline xray",
+            "x-ray analysis",
         ]
         if noise.contains(where: { lower.contains($0) }) { return true }
         if lower.hasPrefix("i've made the current session") { return true }
