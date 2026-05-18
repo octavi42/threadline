@@ -1,7 +1,6 @@
 import Foundation
 
-/// Generates 2-3 sentence "what this session is about" summaries that
-/// capture the overall arc plus the current focus.
+/// Generates one-line "what this session is doing now" summaries.
 ///
 /// Auth model: shells out to the user's installed `claude` (`-p` print mode)
 /// or `codex` (`exec` non-interactive) CLI. That CLI uses whatever auth the
@@ -52,10 +51,9 @@ final class Summarizer {
     private let processSemaphore = DispatchSemaphore(value: 2)
 
     private static let summaryPrompt =
-        "Summarize this coding-assistant session in 2–3 short sentences. " +
-        "Capture the overall arc of the session — the dominant theme of what " +
-        "the developer has been working on — and end with what's currently in " +
-        "focus. Lead with the theme, not the latest turn. No preamble, no fluff."
+        "Return one short present-tense line describing what the AI is doing now. " +
+        "Maximum 12 words. Prefer concrete work over history. " +
+        "No preamble, no bullets, no punctuation-heavy prose."
 
     private var cacheDir: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -133,7 +131,7 @@ final class Summarizer {
         }
         return Summarizer.summaryPrompt
             + "\n\nThe previous summary was: \"\(prev)\". "
-            + "Evolve it to reflect the latest activity below — keep what's still true, update what changed. "
+            + "Replace it with the current activity from the latest turns below. "
             + "If nothing meaningful changed, return the previous summary unchanged."
     }
 
@@ -357,7 +355,7 @@ final class Summarizer {
 
     /// Bump when the prompt or extraction logic changes — old cache entries
     /// then naturally turn into cache misses and get re-generated.
-    private static let cacheVersion = 2
+    private static let cacheVersion = 3
 
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037

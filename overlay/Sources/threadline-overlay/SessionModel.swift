@@ -31,6 +31,9 @@ struct FileEditOp: Equatable, Identifiable {
     /// text is capped at 4KB.
     var rawLinesAdded: Int = 0
     var rawLinesRemoved: Int = 0
+    var patchDisplay: DiffDisplay = .empty
+    var oldTextDisplay: DiffDisplay = .empty
+    var newTextDisplay: DiffDisplay = .empty
 
     var id: String { "\(seq)" }
 }
@@ -40,9 +43,9 @@ struct FileChangeGroup: Equatable, Identifiable {
     var id: String { path }
     let path: String
     var edits: [FileEditOp] = []
+    var linesAdded: Int = 0
+    var linesRemoved: Int = 0
     var retryCount: Int { max(0, edits.count - 1) }
-    var linesAdded: Int { edits.reduce(0) { $0 + $1.rawLinesAdded } }
-    var linesRemoved: Int { edits.reduce(0) { $0 + $1.rawLinesRemoved } }
 }
 
 struct SourceSnapshot: Identifiable, Equatable {
@@ -89,6 +92,11 @@ struct SourceSnapshot: Identifiable, Equatable {
     var terminalSurfaceID: String?
     var terminalWindowID: String?
     var terminalTabID: String?
+    /// Resolved once when the snapshot is built — used for inbox sort and UI.
+    var workState: WorkState = WorkState(status: .done, reason: "", nextAction: "", rank: 6)
+    var tasksDone: Int = 0
+    var tasksInProgress: Int = 0
+    var tasksPending: Int = 0
 
     var projectName: String {
         guard let cwd = cwd, !cwd.isEmpty else { return "—" }
@@ -102,12 +110,12 @@ struct SourceSnapshot: Identifiable, Equatable {
 
     /// Single-line summary for the agents list row.
     var activityLine: String {
-        if let task = currentTask, !task.isEmpty { return task }
+        if let task = currentTask, !task.isEmpty { return SourceSnapshot.compactLine(task) }
         if let t = lastTool, !t.isEmpty { return t }
         if let txt = lastText, !txt.isEmpty {
-            return txt.replacingOccurrences(of: "\n", with: " ")
+            return SourceSnapshot.compactLine(txt)
         }
-        return note ?? "—"
+        return note.map { SourceSnapshot.compactLine($0) } ?? "—"
     }
 
     /// Right-side compact metrics for the details pane.
@@ -120,6 +128,30 @@ struct SourceSnapshot: Identifiable, Equatable {
         if let p = contextPercent  { parts.append(String(format: "%.0f%% ctx", p * 100)) }
         if let c = costUSD, c > 0  { parts.append(String(format: "$%.2f", c)) }
         return parts.joined(separator: " · ")
+    }
+
+    /// Short token-count label: "412", "4.2K", "120K", "1.2M".
+    static func compactLine(_ text: String, limit: Int = 96) -> String {
+        var line = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let end = line.firstIndex(where: { ".!?".contains($0) }) {
+            let sentenceEnd = line.index(after: end)
+            let firstSentence = String(line[..<sentenceEnd])
+            if firstSentence.count >= 24 { line = firstSentence }
+        }
+
+        guard line.count > limit else { return line }
+        let cutoff = line.index(line.startIndex, offsetBy: max(0, limit - 1))
+        let prefix = line[..<cutoff]
+        if let space = prefix.lastIndex(of: " "), space > line.startIndex {
+            return String(prefix[..<space]) + "..."
+        }
+        return String(prefix) + "..."
     }
 
     /// Short token-count label: "412", "4.2K", "120K", "1.2M".
@@ -166,10 +198,6 @@ struct SourceSnapshot: Identifiable, Equatable {
         return "\(m)m"
     }
 
-    var tasksDone:       Int { tasks.filter { $0.status == "completed"   }.count }
-    var tasksInProgress: Int { tasks.filter { $0.status == "in_progress" }.count }
-    var tasksPending:    Int { tasks.filter { $0.status == "pending"     }.count }
-
     private func shortModel(_ m: String) -> String {
         let lower = m.lowercased()
         if let r = lower.range(of: "claude-") { return String(lower[r.upperBound...]) }
@@ -178,9 +206,20 @@ struct SourceSnapshot: Identifiable, Equatable {
     }
 }
 
+struct FolderStats: Equatable {
+    let running: Int
+    let awaiting: Int
+    let tasksDone: Int
+    let taskCount: Int
+    let uniqueFileCount: Int
+    let toolsSummary: String
+}
+
 struct SessionFolder: Identifiable, Equatable {
     let cwd: String
     var snapshots: [SourceSnapshot]
+    var stats: FolderStats = FolderStats(running: 0, awaiting: 0, tasksDone: 0,
+                                         taskCount: 0, uniqueFileCount: 0, toolsSummary: "")
 
     var id: String { cwd }
     var selectionID: String { "folder:\(cwd)" }
@@ -205,27 +244,80 @@ final class SessionModel: ObservableObject {
     /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
     /// Lands asynchronously when the Summarizer completes a fetch.
     @Published var summaries: [String: String] = [:]
+    /// LLM-classified work state keyed by snapshot id. Falls back to
+    /// WorkStatusResolver until the classifier lands.
+    @Published var workStates: [String: WorkState] = [:]
     /// File paths the user has expanded in the Files tab. Stored here so the
     /// 3-second refresh cycle doesn't reset the expansion state.
     @Published var expandedFiles: Set<String> = []
     private var timer: Timer?
+    private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
+    private var refreshGeneration = 0
+    private var currentPollInterval: TimeInterval = 3.0
 
     /// Treat anything modified within this window as "active enough to surface".
     let activeWindow: TimeInterval = 7 * 24 * 3600
 
     func start() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        scheduleTimer(interval: 3.0)
+    }
+
+    func refresh() {
+        refreshQueue.async { [weak self] in
+            self?.performRefresh()
+        }
+    }
+
+    private func performRefresh() {
+        refreshGeneration += 1
+        let generation = refreshGeneration
+
+        let all = buildSnapshots()
+        let folders = Self.makeFolders(from: all)
+        let firstID = all.first?.id
+        let pollInterval = Self.preferredPollInterval(for: all)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, generation == self.refreshGeneration else { return }
+            self.applyRefresh(snapshots: all, folders: folders, firstID: firstID, pollInterval: pollInterval)
+        }
+    }
+
+    private func applyRefresh(snapshots all: [SourceSnapshot],
+                              folders: [SessionFolder],
+                              firstID: String?,
+                              pollInterval: TimeInterval) {
+        if all != snapshots { self.snapshots = all }
+        if folders != self.folders { self.folders = folders }
+        if selectedID == nil || selectedSnapshot == nil && selectedFolder == nil {
+            selectedID = firstID
+        }
+        if pollInterval != currentPollInterval {
+            currentPollInterval = pollInterval
+            scheduleTimer(interval: pollInterval)
+        }
+        if let snap = selectedSnapshot {
+            kickoffSummary(for: snap)
+            kickoffWorkClassification(for: snap)
+        }
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
 
-    func refresh() {
+    private static func preferredPollInterval(for snapshots: [SourceSnapshot]) -> TimeInterval {
+        let active = snapshots.contains { $0.state == .running || $0.livePid != nil }
+        return active ? 3.0 : 10.0
+    }
+
+    private func buildSnapshots() -> [SourceSnapshot] {
         var all: [SourceSnapshot] = []
 
-        // One snapshot per live tab — Claude and Codex are driven directly
-        // off LiveAgents.liveSessions(), which maps each live PID to its
-        // own JSONL file (per-tab uniqueness).
         for session in LiveAgents.liveSessions() {
             var snap: SourceSnapshot?
             switch session.tool {
@@ -251,62 +343,40 @@ final class SessionModel: ObservableObject {
                     s.terminalWindowID = terminal.windowID
                     s.terminalTabID = terminal.tabID
                 }
-                all.append(s)
+                all.append(SourceSnapshot.withDerivedFields(s))
             }
         }
 
-        // Cursor has no per-workspace process, so we surface every workspace
-        // whose state.vscdb was touched in the last 30 min and Cursor.app
-        // is running.
         if LiveAgents.cursorRunning {
             let cursorCutoff = Date().addingTimeInterval(-30 * 60)
-            all.append(contentsOf: CursorSource.readAll(since: cursorCutoff))
+            all.append(contentsOf: CursorSource.readAll(since: cursorCutoff)
+                .map(SourceSnapshot.withDerivedFields))
         }
 
-        // A live tool process is by definition not stale.
         all = all.map { snap in
             var s = snap
             if s.state == .stale { s.state = .idle }
             return s
         }
 
-        // History rows from the Python snapshot store. Surfaces terminated
-        // sessions that produced at least one file snapshot in the last 2h,
-        // and aren't already in the live set above.
         let historyCutoff = Date().addingTimeInterval(-2 * 3600)
         let liveIDs = Set(all.map { $0.id })
-        all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs))
+        all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs)
+            .map(SourceSnapshot.withDerivedFields))
 
         all = all.filter(WorkStatusResolver.shouldDisplay)
-
-        // Inbox order: human-attention state first, recency second.
         all.sort(by: WorkStatusResolver.sort)
-        let firstID = all.first?.id
-        let folders = makeFolders(from: all)
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.snapshots = all
-            self.folders = folders
-            if self.selectedID == nil || self.selectedSnapshot == nil && self.selectedFolder == nil {
-                self.selectedID = firstID
-            }
-            // Eagerly summarise the top N. The summarizer's (path, mtime)
-            // cache short-circuits work for sessions whose JSONL hasn't
-            // changed since the last summary, so this is cheap on every
-            // refresh and only pays the LLM call when something actually
-            // moved.
-            for snap in all.prefix(10) {
-                self.kickoffSummary(for: snap)
-            }
-        }
+        return all
     }
 
-    private func makeFolders(from snapshots: [SourceSnapshot]) -> [SessionFolder] {
+    private static func makeFolders(from snapshots: [SourceSnapshot]) -> [SessionFolder] {
         let grouped = Dictionary(grouping: snapshots) { snap in
-            normalizedCwd(snap.cwd)
+            guard let cwd = snap.cwd, !cwd.isEmpty else { return "Unknown" }
+            return (cwd as NSString).standardizingPath
         }
         return grouped.map { cwd, snaps in
-            SessionFolder(cwd: cwd, snapshots: snaps.sorted(by: WorkStatusResolver.sort))
+            let sorted = snaps.sorted(by: WorkStatusResolver.sort)
+            return SessionFolder(cwd: cwd, snapshots: sorted, stats: SessionFolder.makeStats(from: sorted))
         }
         .sorted { a, b in
             guard let la = a.latestSnapshot else { return false }
@@ -335,6 +405,20 @@ final class SessionModel: ObservableObject {
         }
     }
 
+    private func kickoffWorkClassification(for snap: SourceSnapshot) {
+        guard snap.jsonlPath != nil, snap.updatedAt != nil else { return }
+        let id = snap.id
+        let cached = WorkClassifier.shared.classify(
+            snap: snap,
+            onUpdate: { [weak self] work in
+                self?.workStates[id] = work
+            }
+        )
+        if let cached = cached, workStates[id] != cached {
+            workStates[id] = cached
+        }
+    }
+
     var selectedSnapshot: SourceSnapshot? {
         guard let id = selectedID else { return nil }
         return snapshots.first { $0.id == id }
@@ -350,6 +434,7 @@ final class SessionModel: ObservableObject {
     func requestSummaryForSelection() {
         guard let snap = selectedSnapshot else { return }
         kickoffSummary(for: snap)
+        kickoffWorkClassification(for: snap)
     }
 
     @discardableResult

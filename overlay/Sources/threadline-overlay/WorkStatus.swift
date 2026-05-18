@@ -71,7 +71,7 @@ enum WorkStatusResolver {
                              rank: 3)
         }
 
-        if snap.state == .running || snap.livePid != nil {
+        if isActivelyWorking(snap) {
             return WorkState(status: .working,
                              reason: workingReason(snap),
                              nextAction: "Watch",
@@ -96,9 +96,7 @@ enum WorkStatusResolver {
     }
 
     static func sort(_ a: SourceSnapshot, _ b: SourceSnapshot) -> Bool {
-        let aw = resolve(a)
-        let bw = resolve(b)
-        if aw.rank != bw.rank { return aw.rank < bw.rank }
+        if a.workState.rank != b.workState.rank { return a.workState.rank < b.workState.rank }
         let ad = a.updatedAt ?? .distantPast
         let bd = b.updatedAt ?? .distantPast
         if ad != bd { return ad > bd }
@@ -110,6 +108,12 @@ enum WorkStatusResolver {
         if snap.linesAdded > 0 || snap.linesRemoved > 0 { return true }
         if let dirty = snap.dirtyCount, dirty > 0 { return true }
         return false
+    }
+
+    static func isActivelyWorking(_ snap: SourceSnapshot, now: Date = Date()) -> Bool {
+        guard snap.state == .running || snap.livePid != nil else { return false }
+        guard let updatedAt = snap.updatedAt else { return snap.state == .running }
+        return now.timeIntervalSince(updatedAt) < 120
     }
 
     private static func searchableText(_ snap: SourceSnapshot) -> String {
@@ -157,45 +161,35 @@ enum WorkStatusResolver {
     }
 
     private static func hasFailedTestSignal(_ text: String) -> Bool {
-        guard containsTestSignal(text) else { return false }
-        return text.contains("failed") ||
-            text.contains("failure") ||
-            text.contains("exit code 1") ||
-            text.contains("exit status 1") ||
-            text.contains("conclusion: failure") ||
-            text.contains("\"conclusion\":\"failure\"")
+        let phrases = [
+            "pytest failed", "npm test failed", "npm run test failed",
+            "yarn test failed", "swift test failed", "go test failed",
+            "cargo test failed", "vitest failed", "jest failed",
+            "exit code 1", "exit status 1",
+            "\"conclusion\":\"failure\"", "\"conclusion\": \"failure\""
+        ]
+        return phrases.contains { text.contains($0) }
     }
 
     private static func hasPassedTestSignal(_ text: String) -> Bool {
-        guard containsTestSignal(text) else { return false }
-        return text.contains("passed") ||
-            text.contains("succeeded") ||
-            text.contains("success") ||
-            text.contains("green") ||
-            text.contains("\"conclusion\":\"success\"")
-    }
-
-    private static func containsTestSignal(_ text: String) -> Bool {
-        let needles = [
-            "pytest", "npm test", "npm run test", "yarn test", "swift test",
-            "go test", "cargo test", "vitest", "jest", "gh run", "github action",
-            "workflow", "ci"
+        let phrases = [
+            "pytest passed", "npm test passed", "npm run test passed",
+            "yarn test passed", "swift test passed", "go test passed",
+            "cargo test passed", "vitest passed", "jest passed",
+            "tests passed", "test passed", "build complete",
+            "\"conclusion\":\"success\"", "\"conclusion\": \"success\""
         ]
-        return needles.contains { text.contains($0) }
+        return phrases.contains { text.contains($0) }
     }
 
     private static func isStuck(_ snap: SourceSnapshot, text: String) -> Bool {
         if text.contains("same error") || text.contains("repeated") { return true }
-        if snap.fileChanges.contains(where: { $0.retryCount >= 3 }) { return true }
         if snap.state == .stale && snap.tasksInProgress > 0 { return true }
         return false
     }
 
     private static func stuckReason(_ snap: SourceSnapshot, text: String) -> String {
         if text.contains("same error") { return "same error repeated" }
-        if let retry = snap.fileChanges.map(\.retryCount).max(), retry >= 3 {
-            return "\(retry + 1) edits to the same file"
-        }
         return "stale with work in progress"
     }
 
@@ -220,5 +214,45 @@ enum WorkStatusResolver {
         if let text = snap.lastText, !text.isEmpty { return "answer complete" }
         if let note = snap.note, !note.isEmpty { return note }
         return "no code changes"
+    }
+}
+
+extension SourceSnapshot {
+    /// Fill work status, task counts, and per-file line totals once per refresh.
+    static func withDerivedFields(_ snap: SourceSnapshot) -> SourceSnapshot {
+        var s = snap
+        s.workState = WorkStatusResolver.resolve(s)
+        s.tasksDone = s.tasks.filter { $0.status == "completed" }.count
+        s.tasksInProgress = s.tasks.filter { $0.status == "in_progress" }.count
+        s.tasksPending = s.tasks.filter { $0.status == "pending" }.count
+        s.fileChanges = s.fileChanges.map { group in
+            var g = group
+            g.linesAdded = g.edits.reduce(0) { $0 + $1.rawLinesAdded }
+            g.linesRemoved = g.edits.reduce(0) { $0 + $1.rawLinesRemoved }
+            return g
+        }
+        return s
+    }
+}
+
+extension SessionFolder {
+    static func makeStats(from snapshots: [SourceSnapshot]) -> FolderStats {
+        var seenFiles: Set<String> = []
+        for path in snapshots.flatMap(\.filesEdited) {
+            seenFiles.insert(path)
+        }
+        let tasks = snapshots.flatMap(\.tasks)
+        let tools = Dictionary(grouping: snapshots, by: \.tool)
+            .map { "\($0.key) \($0.value.count)" }
+            .sorted()
+            .joined(separator: " · ")
+        return FolderStats(
+            running: snapshots.filter { $0.state == .running }.count,
+            awaiting: snapshots.filter { $0.state == .awaiting }.count,
+            tasksDone: tasks.filter { $0.status == "completed" }.count,
+            taskCount: tasks.count,
+            uniqueFileCount: seenFiles.count,
+            toolsSummary: tools
+        )
     }
 }

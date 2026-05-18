@@ -247,7 +247,7 @@ enum ClaudeSource {
         }
         snap.jsonlPath = jsonlPath
 
-        return snap
+        return SourceSnapshot.withDerivedFields(snap)
     }
 
     private static func parseISO8601(_ s: String) -> Date? {
@@ -353,9 +353,9 @@ enum ClaudeSource {
                         if let fp = filePath {
                             editSeq += 1
                             editsByFile[fp, default: []].append(
-                                FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
-                                           oldText: truncate(old), newText: truncate(new),
-                                           rawLinesAdded: addedN, rawLinesRemoved: removedN))
+                                FileEditOp.withDisplays(seq: editSeq, tool: "Edit", timestamp: ts,
+                                                        oldText: truncate(old), newText: truncate(new),
+                                                        rawLinesAdded: addedN, rawLinesRemoved: removedN))
                         }
                     case "MultiEdit":
                         if let edits = input["edits"] as? [[String: Any]] {
@@ -369,9 +369,9 @@ enum ClaudeSource {
                                 if let fp = filePath {
                                     editSeq += 1
                                     editsByFile[fp, default: []].append(
-                                        FileEditOp(seq: editSeq, tool: "Edit", timestamp: ts,
-                                                   oldText: truncate(old), newText: truncate(new),
-                                                   rawLinesAdded: addedN, rawLinesRemoved: removedN))
+                                        FileEditOp.withDisplays(seq: editSeq, tool: "Edit", timestamp: ts,
+                                                                oldText: truncate(old), newText: truncate(new),
+                                                                rawLinesAdded: addedN, rawLinesRemoved: removedN))
                                 }
                             }
                         }
@@ -382,9 +382,9 @@ enum ClaudeSource {
                         if let fp = filePath {
                             editSeq += 1
                             editsByFile[fp, default: []].append(
-                                FileEditOp(seq: editSeq, tool: "Write", timestamp: ts,
-                                           newText: truncate(content), note: "full file write",
-                                           rawLinesAdded: addedN))
+                                FileEditOp.withDisplays(seq: editSeq, tool: "Write", timestamp: ts,
+                                                        newText: truncate(content), note: "full file write",
+                                                        rawLinesAdded: addedN))
                         }
                     case "apply_patch":
                         let patch = (input["patch"] as? String)
@@ -394,10 +394,10 @@ enum ClaudeSource {
                         linesRemoved += patchRemoved
                         let targets = filePath.map { [$0] } ?? parsePatchPaths(patch)
                         editSeq += 1
-                        let op = FileEditOp(seq: editSeq, tool: "apply_patch", timestamp: ts,
-                                            patchText: truncate(patch),
-                                            rawLinesAdded: patchAdded,
-                                            rawLinesRemoved: patchRemoved)
+                        let op = FileEditOp.withDisplays(seq: editSeq, tool: "apply_patch", timestamp: ts,
+                                                       patchText: truncate(patch),
+                                                       rawLinesAdded: patchAdded,
+                                                       rawLinesRemoved: patchRemoved)
                         for fp in targets {
                             editsByFile[fp, default: []].append(op)
                         }

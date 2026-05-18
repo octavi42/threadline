@@ -101,7 +101,9 @@ private struct AgentsList: View {
                                 )
                             ) {
                                 ForEach(folder.snapshots) { snap in
-                                    AgentRow(snap: snap, summary: model.summaries[snap.id])
+                                    AgentRow(snap: snap,
+                                             summary: model.summaries[snap.id],
+                                             workState: model.workStates[snap.id])
                                         .tag(snap.id)
                                 }
                             }
@@ -175,8 +177,9 @@ private struct FolderStateDots: View {
 private struct AgentRow: View {
     let snap: SourceSnapshot
     let summary: String?
+    let workState: WorkState?
     var body: some View {
-        let work = WorkStatusResolver.resolve(snap)
+        let work = workState ?? snap.workState
         HStack(alignment: .top, spacing: 8) {
             Circle()
                 .fill(workStatusColor(work.status))
@@ -217,7 +220,7 @@ private struct AgentRow: View {
     }
     private var secondaryLine: String? {
         if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return s
+            return SourceSnapshot.compactLine(s)
         }
         let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback == "—" ? nil : fallback
@@ -233,7 +236,7 @@ private struct DetailsPane: View {
     var body: some View {
         if let snap = model.selectedSnapshot {
             VStack(alignment: .leading, spacing: 0) {
-                DetailHeader(snap: snap)
+                DetailHeader(snap: snap, workState: model.workStates[snap.id] ?? snap.workState)
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
                     .padding(.bottom, 10)
@@ -249,9 +252,10 @@ private struct DetailsPane: View {
                 }
                 Divider().padding(.top, 8)
                 ScrollView {
-                    Group {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         switch tab {
-                        case .overview: OverviewView(snap: snap)
+                        case .overview: OverviewView(snap: snap,
+                                                     workState: model.workStates[snap.id] ?? snap.workState)
                         case .tasks:    TasksView(snap: snap)
                         case .files:    FilesView(model: model, snap: snap)
                         case .summary:  SummaryView(model: model, snap: snap)
@@ -288,7 +292,7 @@ private struct FolderDetailsPane: View {
                 .padding(.bottom, 10)
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     FolderStatsView(folder: folder)
                     FolderSubagentsView(model: model, folder: folder)
                     FolderTasksView(folder: folder)
@@ -328,21 +332,14 @@ private struct FolderStatsView: View {
     let folder: SessionFolder
 
     var body: some View {
-        let running = folder.snapshots.filter { $0.state == .running }.count
-        let awaiting = folder.snapshots.filter { $0.state == .awaiting }.count
-        let tasks = folder.snapshots.flatMap(\.tasks)
-        let files = uniqueFiles
-        let tools = Dictionary(grouping: folder.snapshots, by: \.tool)
-            .map { "\($0.key) \($0.value.count)" }
-            .sorted()
-            .joined(separator: " · ")
+        let stats = folder.stats
         let items: [(String, String?)] = [
             ("subagents", "\(folder.snapshots.count)"),
-            ("running", running > 0 ? "\(running)" : nil),
-            ("awaiting", awaiting > 0 ? "\(awaiting)" : nil),
-            ("tools", tools.isEmpty ? nil : tools),
-            ("tasks", tasks.isEmpty ? nil : "\(tasks.filter { $0.status == "completed" }.count)/\(tasks.count) done"),
-            ("files edited", files.isEmpty ? nil : "\(files.count)"),
+            ("running", stats.running > 0 ? "\(stats.running)" : nil),
+            ("awaiting", stats.awaiting > 0 ? "\(stats.awaiting)" : nil),
+            ("tools", stats.toolsSummary.isEmpty ? nil : stats.toolsSummary),
+            ("tasks", stats.taskCount == 0 ? nil : "\(stats.tasksDone)/\(stats.taskCount) done"),
+            ("files edited", stats.uniqueFileCount == 0 ? nil : "\(stats.uniqueFileCount)"),
         ]
 
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3),
@@ -363,16 +360,6 @@ private struct FolderStatsView: View {
             }
         }
     }
-
-    private var uniqueFiles: [String] {
-        var seen: Set<String> = []
-        var out: [String] = []
-        for path in folder.snapshots.flatMap(\.filesEdited) where !seen.contains(path) {
-            seen.insert(path)
-            out.append(path)
-        }
-        return out
-    }
 }
 
 private struct FolderSubagentsView: View {
@@ -387,8 +374,10 @@ private struct FolderSubagentsView: View {
                     Button {
                         model.selectedID = snap.id
                     } label: {
+                        let work = model.workStates[snap.id] ?? snap.workState
                         HStack(alignment: .top, spacing: 8) {
-                            StateDot(state: snap.state)
+                            Circle()
+                                .fill(workStatusColor(work.status))
                                 .frame(width: 7, height: 7)
                                 .padding(.top, 4)
                             BadgeView(label: snap.badge, color: badgeColor(snap.tool))
@@ -397,6 +386,9 @@ private struct FolderSubagentsView: View {
                                 HStack {
                                     Text(snap.tool)
                                         .font(.system(size: 12, weight: .semibold))
+                                    Text(work.status.rawValue)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(workStatusColor(work.status))
                                     Text(snap.metricsLine)
                                         .font(.system(size: 10, design: .monospaced))
                                         .foregroundColor(.secondary)
@@ -506,8 +498,9 @@ private struct FolderFilesView: View {
 
 private struct DetailHeader: View {
     let snap: SourceSnapshot
+    let workState: WorkState
     var body: some View {
-        let work = WorkStatusResolver.resolve(snap)
+        let work = workState
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Circle()
@@ -534,8 +527,9 @@ private struct DetailHeader: View {
 
 private struct OverviewView: View {
     let snap: SourceSnapshot
+    let workState: WorkState
     var body: some View {
-        let work = WorkStatusResolver.resolve(snap)
+        let work = workState
         VStack(alignment: .leading, spacing: 18) {
             WorkSummaryView(snap: snap, work: work)
             statsGrid
@@ -545,8 +539,8 @@ private struct OverviewView: View {
             if let last = snap.lastTool, !last.isEmpty {
                 section(label: "Last action", text: last, mono: true)
             }
-            if let lastText = snap.lastText, !lastText.isEmpty {
-                section(label: "Last message", text: lastText)
+            if snap.activityLine != "—" {
+                section(label: "Current activity", text: snap.activityLine)
             }
             Spacer(minLength: 0)
         }
@@ -776,9 +770,18 @@ private struct TaskRow: View {
 private struct FilesView: View {
     @ObservedObject var model: SessionModel
     let snap: SourceSnapshot
+    @State private var showAllFiles = false
+    @State private var xrayExpanded = false
+
+    private static let defaultVisibleFiles = 15
 
     private var fileCount: Int {
         snap.fileChanges.isEmpty ? snap.filesEdited.count : snap.fileChanges.count
+    }
+
+    private var visibleFileChanges: [FileChangeGroup] {
+        if showAllFiles { return snap.fileChanges }
+        return Array(snap.fileChanges.prefix(Self.defaultVisibleFiles))
     }
 
     var body: some View {
@@ -824,7 +827,7 @@ private struct FilesView: View {
                 }
                 if !snap.fileChanges.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(snap.fileChanges) { group in
+                        ForEach(visibleFileChanges) { group in
                             FileChangeRow(group: group,
                                           isExpanded: model.expandedFiles.contains(group.path),
                                           toggle: {
@@ -834,6 +837,14 @@ private struct FilesView: View {
                                     model.expandedFiles.insert(group.path)
                                 }
                             })
+                        }
+                        if snap.fileChanges.count > Self.defaultVisibleFiles {
+                            Button(showAllFiles ? "Show fewer files" : "Show \(snap.fileChanges.count - Self.defaultVisibleFiles) more files") {
+                                showAllFiles.toggle()
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
                         }
                     }
                 } else if !snap.filesEdited.isEmpty {
@@ -853,7 +864,16 @@ private struct FilesView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            XRayView(snap: snap)
+            DisclosureGroup(isExpanded: $xrayExpanded) {
+                if xrayExpanded {
+                    XRayView(snap: snap)
+                }
+            } label: {
+                Text("X-RAY ANALYSIS")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.5)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 }
@@ -952,14 +972,14 @@ private struct EditOpView: View {
                 Spacer()
             }
 
-            if !op.patchText.isEmpty {
-                DiffBlock(text: op.patchText, mode: .patch)
+            if !op.patchDisplay.lines.isEmpty {
+                DiffBlock(display: op.patchDisplay, mode: .patch)
             } else {
-                if !op.oldText.isEmpty {
-                    DiffBlock(text: op.oldText, mode: .removed)
+                if !op.oldTextDisplay.lines.isEmpty {
+                    DiffBlock(display: op.oldTextDisplay, mode: .removed)
                 }
-                if !op.newText.isEmpty {
-                    DiffBlock(text: op.newText, mode: .added)
+                if !op.newTextDisplay.lines.isEmpty {
+                    DiffBlock(display: op.newTextDisplay, mode: .added)
                 }
             }
         }
@@ -983,18 +1003,17 @@ private struct EditOpView: View {
 private enum DiffMode { case added, removed, patch }
 
 private struct DiffBlock: View {
-    let text: String
+    let display: DiffDisplay
     let mode: DiffMode
 
     var body: some View {
-        let lines = text.components(separatedBy: "\n")
         ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.prefix(50).enumerated()), id: \.offset) { _, line in
+                ForEach(Array(display.lines.enumerated()), id: \.offset) { _, line in
                     lineView(line)
                 }
-                if lines.count > 50 {
-                    Text("… \(lines.count - 50) more lines")
+                if display.hasMore {
+                    Text("… \(display.hiddenCount) more lines")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
@@ -1088,7 +1107,7 @@ private struct SummaryView: View {
     var body: some View {
         if let text = model.summaries[snap.id], !text.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("SUMMARY")
+                Text("CURRENT")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
                     .tracking(0.5)
                     .foregroundColor(.secondary)

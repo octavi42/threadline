@@ -1,6 +1,31 @@
 import Foundation
 
 enum CodexSource {
+    struct ParsedSession {
+        var model: String?
+        var contextLimit: Int?
+        var lastAssistant: String?
+        var lastUser: String?
+        var lastTokenUsage: (input: Int, cached: Int, output: Int)?
+        var sawStartedAfterComplete = false
+        var userTurns = 0
+        var assistantTurns = 0
+        var filesEditedOrder: [String] = []
+        var toolCounts: [String: Int] = [:]
+        var toolTokens: [String: Int] = [:]
+        var linesAdded = 0
+        var linesRemoved = 0
+        var fileChanges: [FileChangeGroup] = []
+    }
+
+    private struct CacheEntry {
+        let mtime: Date
+        let parsed: ParsedSession
+    }
+
+    private static var sessionCache: [String: CacheEntry] = [:]
+    private static let sessionCacheLock = NSLock()
+
     /// One snapshot per unique `session_meta.cwd` whose newest rollout file is
     /// more recent than `since`.
     static func readAll(since cutoff: Date) -> [SourceSnapshot] {
@@ -20,7 +45,6 @@ enum CodexSource {
         }
         all.sort { $0.1 > $1.1 }
 
-        // Group by session_meta.cwd; keep the newest jsonl per cwd.
         var bestPerCwd: [String: (URL, Date)] = [:]
         for (url, mtime) in all {
             guard let cwd = readSessionCwd(at: url) else { continue }
@@ -38,9 +62,6 @@ enum CodexSource {
     }
 
     private static func readSessionCwd(at url: URL) -> String? {
-        // session_meta records carry the full system prompt and can exceed
-        // 4KB; read a larger head so the first newline (record terminator)
-        // is included.
         guard let head = headOfFile(path: url.path, maxBytes: 64 * 1024) else { return nil }
         for raw in head.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -54,9 +75,6 @@ enum CodexSource {
         return nil
     }
 
-    /// Build a snapshot for a specific JSONL — used by LiveAgents to produce
-    /// one row per live tab. Reads the head to find session_meta.cwd, then
-    /// delegates to the existing snapshot builder.
     static func snapshot(forJSONL path: String) -> SourceSnapshot? {
         let url = URL(fileURLWithPath: path)
         guard let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
@@ -66,33 +84,72 @@ enum CodexSource {
     }
 
     private static func snapshot(at url: URL, mtime: Date, knownCwd: String) -> SourceSnapshot? {
-        // ID is the absolute JSONL path so each tab is uniquely addressable
-        // even when multiple tabs share the same project (cwd).
         var snap = SourceSnapshot(id: "codex:\(url.path)",
                                   tool: "Codex",
                                   badge: "CDX")
         snap.updatedAt = mtime
         snap.cwd = knownCwd
+        snap.jsonlPath = url.path
 
-        guard let text = try? String(contentsOfFile: url.path, encoding: .utf8) else { return snap }
+        let parsed = parseSession(at: url, mtime: mtime)
+        snap.model = parsed.model
+        snap.lastText = parsed.lastAssistant ?? parsed.lastUser
 
-        var model: String?
-        var contextLimit: Int?
-        var lastAssistant: String?
-        var lastUser: String?
-        var lastTokenUsage: (input: Int, cached: Int, output: Int)?
-        var sawStartedAfterComplete = false
-        var userTurns = 0
-        var assistantTurns = 0
+        let ageSec = -mtime.timeIntervalSinceNow
+        if parsed.sawStartedAfterComplete && ageSec < 30 { snap.state = .running }
+        else if ageSec < 5                          { snap.state = .running }
+        else if ageSec > 300                        { snap.state = .stale }
+        else                                        { snap.state = .idle }
+
+        if let u = parsed.lastTokenUsage, let limit = parsed.contextLimit, limit > 0 {
+            snap.contextPercent = min(1.0, Double(u.input + u.cached) / Double(limit))
+        }
+        if let info = Git.info(cwd: knownCwd) {
+            snap.branch = info.branch
+            snap.dirtyCount = info.dirty
+        }
+        snap.userTurns = parsed.userTurns
+        snap.assistantTurns = parsed.assistantTurns
+        snap.filesEdited = parsed.filesEditedOrder
+        snap.toolCallCounts = parsed.toolCounts
+        snap.toolTokenEstimate = parsed.toolTokens
+        snap.linesAdded = parsed.linesAdded
+        snap.linesRemoved = parsed.linesRemoved
+        snap.fileChanges = parsed.fileChanges
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let birth = attrs[.creationDate] as? Date {
+            snap.sessionStart = birth
+        }
+        return SourceSnapshot.withDerivedFields(snap)
+    }
+
+    private static func parseSession(at url: URL, mtime: Date) -> ParsedSession {
+        sessionCacheLock.lock()
+        if let hit = sessionCache[url.path], hit.mtime == mtime {
+            sessionCacheLock.unlock()
+            return hit.parsed
+        }
+        sessionCacheLock.unlock()
+
+        let parsed = scanFile(at: url)
+        sessionCacheLock.lock()
+        sessionCache[url.path] = CacheEntry(mtime: mtime, parsed: parsed)
+        if sessionCache.count > 32 {
+            let drop = sessionCache.keys.sorted().prefix(sessionCache.count - 24)
+            drop.forEach { sessionCache.removeValue(forKey: $0) }
+        }
+        sessionCacheLock.unlock()
+        return parsed
+    }
+
+    private static func scanFile(at url: URL) -> ParsedSession {
+        var out = ParsedSession()
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return out }
+
         var editSeq = 0
         var pendingPatchInputs: [String: String] = [:]
         var editsByFile: [String: [FileEditOp]] = [:]
-        var filesEditedOrder: [String] = []
         var filesEditedSeen: Set<String> = []
-        var toolCounts: [String: Int] = [:]
-        var toolTokens: [String: Int] = [:]
-        var linesAdded = 0
-        var linesRemoved = 0
 
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -102,40 +159,40 @@ enum CodexSource {
             let payload = rec["payload"] as? [String: Any] ?? [:]
             switch type {
             case "session_meta":
-                if let m = payload["model"] as? String { model = m }
-                if let limit = payload["model_context_window"] as? Int { contextLimit = limit }
+                if let m = payload["model"] as? String { out.model = m }
+                if let limit = payload["model_context_window"] as? Int { out.contextLimit = limit }
             case "event_msg":
                 let etype = payload["type"] as? String
-                if etype == "task_started"  { sawStartedAfterComplete = true }
-                if etype == "task_complete" { sawStartedAfterComplete = false }
+                if etype == "task_started"  { out.sawStartedAfterComplete = true }
+                if etype == "task_complete" { out.sawStartedAfterComplete = false }
                 if etype == "agent_message", let m = payload["message"] as? String, !m.isEmpty {
-                    lastAssistant = m
+                    out.lastAssistant = m
                 }
                 if etype == "user_message",  let m = payload["message"] as? String, !m.isEmpty {
-                    lastUser = m
+                    out.lastUser = m
                 }
                 if etype == "token_count", let info = payload["info"] as? [String: Any] {
                     let i = (info["input_tokens"]         as? Int) ?? 0
                     let c = (info["cached_input_tokens"]  as? Int) ?? 0
                     let o = (info["output_tokens"]        as? Int) ?? 0
-                    if i + c + o > 0 { lastTokenUsage = (i, c, o) }
+                    if i + c + o > 0 { out.lastTokenUsage = (i, c, o) }
                 }
             case "response_item":
                 let ptype = payload["type"] as? String
                 if ptype == "message" {
                     let role = payload["role"] as? String
                     let content = payload["content"] as? [[String: Any]] ?? []
-                    let text = content.compactMap { $0["text"] as? String }.joined(separator: " ")
-                    if !text.isEmpty {
-                        if role == "assistant" { lastAssistant = text; assistantTurns += 1 }
-                        else if role == "user" { lastUser = text; userTurns += 1 }
+                    let lineText = content.compactMap { $0["text"] as? String }.joined(separator: " ")
+                    if !lineText.isEmpty {
+                        if role == "assistant" { out.lastAssistant = lineText; out.assistantTurns += 1 }
+                        else if role == "user" { out.lastUser = lineText; out.userTurns += 1 }
                     }
                 } else if ptype == "custom_tool_call" {
                     let name = payload["name"] as? String ?? ""
                     guard !name.isEmpty else { break }
-                    toolCounts[name, default: 0] += 1
+                    out.toolCounts[name, default: 0] += 1
                     if let rawInput = payload["input"] as? String {
-                        toolTokens[name, default: 0] += estimateTokens(rawInput)
+                        out.toolTokens[name, default: 0] += estimateTokens(rawInput)
                         if name == "apply_patch", let callID = payload["call_id"] as? String {
                             pendingPatchInputs[callID] = rawInput
                         }
@@ -161,55 +218,28 @@ enum CodexSource {
                 let patch = (change["unified_diff"] as? String) ?? patchForPath(path, in: fallbackPatch)
                 let counts = countPatchLines(patch)
                 editSeq += 1
-                let op = FileEditOp(seq: editSeq,
-                                    tool: "apply_patch",
-                                    timestamp: rec["timestamp"] as? String ?? "",
-                                    patchText: truncate(patch),
-                                    note: change["type"] as? String ?? "",
-                                    rawLinesAdded: counts.added,
-                                    rawLinesRemoved: counts.removed)
+                let truncated = truncate(patch)
+                let op = FileEditOp.withDisplays(seq: editSeq,
+                                               tool: "apply_patch",
+                                               timestamp: rec["timestamp"] as? String ?? "",
+                                               patchText: truncated,
+                                               note: change["type"] as? String ?? "",
+                                               rawLinesAdded: counts.added,
+                                               rawLinesRemoved: counts.removed)
                 editsByFile[path, default: []].append(op)
                 if !filesEditedSeen.contains(path) {
                     filesEditedSeen.insert(path)
-                    filesEditedOrder.append(path)
+                    out.filesEditedOrder.append(path)
                 }
-                linesAdded += counts.added
-                linesRemoved += counts.removed
+                out.linesAdded += counts.added
+                out.linesRemoved += counts.removed
             }
         }
 
-        snap.model = model
-        snap.lastText = lastAssistant ?? lastUser
-
-        let ageSec = -mtime.timeIntervalSinceNow
-        if sawStartedAfterComplete && ageSec < 30 { snap.state = .running }
-        else if ageSec < 5                          { snap.state = .running }
-        else if ageSec > 300                        { snap.state = .stale }
-        else                                        { snap.state = .idle }
-
-        if let u = lastTokenUsage, let limit = contextLimit, limit > 0 {
-            snap.contextPercent = min(1.0, Double(u.input + u.cached) / Double(limit))
-        }
-        if let info = Git.info(cwd: knownCwd) {
-            snap.branch = info.branch
-            snap.dirtyCount = info.dirty
-        }
-        snap.userTurns = userTurns
-        snap.assistantTurns = assistantTurns
-        snap.filesEdited = filesEditedOrder
-        snap.toolCallCounts = toolCounts
-        snap.toolTokenEstimate = toolTokens
-        snap.linesAdded = linesAdded
-        snap.linesRemoved = linesRemoved
-        snap.fileChanges = filesEditedOrder.map { path in
+        out.fileChanges = out.filesEditedOrder.map { path in
             FileChangeGroup(path: path, edits: editsByFile[path] ?? [])
         }
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let birth = attrs[.creationDate] as? Date {
-            snap.sessionStart = birth
-        }
-        snap.jsonlPath = url.path
-        return snap
+        return out
     }
 
     private static func estimateTokens(_ text: String) -> Int {

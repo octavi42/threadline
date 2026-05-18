@@ -177,7 +177,46 @@ final class WorkStatusResolverTests: XCTestCase {
         needs.lastText = "Please run /login."
         needs.updatedAt = Date().addingTimeInterval(-3600)
 
-        XCTAssertTrue(WorkStatusResolver.sort(needs, ready))
+        let readySnap = SourceSnapshot.withDerivedFields(ready)
+        let needsSnap = SourceSnapshot.withDerivedFields(needs)
+        XCTAssertTrue(WorkStatusResolver.sort(needsSnap, readySnap))
+    }
+
+    func testOldLivePidIsNotWorkingByItself() {
+        var snap = baseSnapshot(state: .idle)
+        snap.livePid = 123
+        snap.updatedAt = Date().addingTimeInterval(-3600)
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .done)
+    }
+
+    func testStatusWordsAloneDoNotCreateFailedTests() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "We discussed labels like Tests failed and Risky."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .done)
+    }
+
+    func testActivityLineCompactsLongAssistantText() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = """
+        I inspected the current implementation and found the issue.
+        The fix should focus on the focused terminal identity path instead of the folder fallback.
+        """
+
+        XCTAssertEqual(snap.activityLine,
+                       "I inspected the current implementation and found the issue.")
+    }
+
+    func testActivityLineTruncatesVeryLongText() {
+        let text = "Threadline is rebuilding the session inbox around concise current activity summaries for active agents"
+
+        XCTAssertEqual(SourceSnapshot.compactLine(text, limit: 48),
+                       "Threadline is rebuilding the session inbox...")
     }
 
     private func baseSnapshot(state: SourceState, id: String = "snap") -> SourceSnapshot {
