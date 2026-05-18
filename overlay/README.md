@@ -1,5 +1,7 @@
 # threadline-overlay
 
+Part of [Threadline](../README.md) — install and overview live in the root README.
+
 A small macOS app window that shows the live context of your AI coding
 sessions: Claude Code, Codex CLI, and Cursor.
 

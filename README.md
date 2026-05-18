@@ -1,5 +1,9 @@
 # Threadline
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)](overlay/Package.swift)
+[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)](overlay/Package.swift)
+
 **See what your AI coding agents are doing — without leaving your flow.**
 
 Threadline is a small macOS overlay that surfaces live context from **Claude Code**, **Codex CLI**, and **Cursor** in one window: last message, model, project path, and how long each session has been running. Toggle it from anywhere with a global hotkey.
