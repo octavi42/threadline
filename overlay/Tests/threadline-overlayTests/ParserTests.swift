@@ -124,7 +124,7 @@ final class WorkStatusResolverTests: XCTestCase {
 
         XCTAssertEqual(work.status, .needsYou)
         XCTAssertEqual(work.reason, "usage limit reached")
-        XCTAssertEqual(work.nextAction, "Jump back")
+        XCTAssertEqual(work.nextAction, "Check usage")
     }
 
     func testRiskyWhenCodeChangedWithoutEvidence() {

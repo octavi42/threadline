@@ -72,14 +72,14 @@ enum WorkStatusResolver {
         if let blocked {
             return WorkState(status: .needsYou,
                              reason: blocked,
-                             nextAction: "Jump back",
+                             nextAction: nextActionForBlocker(blocked),
                              rank: 0)
         }
 
         if snap.state == .awaiting {
             return WorkState(status: .needsYou,
                              reason: "waiting for your reply",
-                             nextAction: "Jump back",
+                             nextAction: "Reply",
                              rank: 0)
         }
 
@@ -316,6 +316,16 @@ enum WorkStatusResolver {
         if text.contains("uses your installed `claude -p` or `codex exec`") { return true }
         if snap.tool == "Codex", text.contains("codex exec"), text.contains("summarize") { return true }
         return false
+    }
+
+    private static func nextActionForBlocker(_ reason: String) -> String {
+        switch reason {
+        case "waiting for approval": return "Approve"
+        case "usage limit reached": return "Check usage"
+        case "login required": return "Sign in"
+        case "permission denied": return "Allow"
+        default: return "Jump back"
+        }
     }
 
     private static func blockedReason(_ text: String) -> String? {

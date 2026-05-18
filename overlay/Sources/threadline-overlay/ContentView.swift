@@ -252,6 +252,13 @@ private struct FolderHeader: View {
     }
 }
 
+/// Sidebar actions — hide generic "Jump back"; status already implies it (Enter still jumps).
+private func inboxNextAction(_ work: WorkState) -> String? {
+    let action = work.nextAction.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !action.isEmpty, action != "Jump back" else { return nil }
+    return action
+}
+
 private struct AgentRow: View {
     let snap: SourceSnapshot
     let workState: WorkState?
@@ -269,8 +276,8 @@ private struct AgentRow: View {
                         .foregroundColor(workStatusColor(work.status))
                         .lineLimit(1)
                 }
-                if !work.nextAction.isEmpty {
-                    Text("→ \(work.nextAction)")
+                if let action = inboxNextAction(work) {
+                    Text("→ \(action)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(workStatusColor(work.status).opacity(0.9))
                         .lineLimit(1)
