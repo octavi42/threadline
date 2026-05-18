@@ -9,10 +9,11 @@ import Foundation
 /// (tiny) cost goes against the user's existing plan.
 ///
 /// Fallback order:
-///   1. `claude -p --model haiku` (cheapest, fast)
-///   2. `codex exec` (if claude isn't installed)
-///   3. Anthropic Messages API directly if `ANTHROPIC_API_KEY` is set
-///   4. nil — Summary tab shows a "no summarizer available" hint
+///   1. Local Ollama (`THREADLINE_OLLAMA_*` / `~/.threadline/config.json`)
+///   2. `claude -p --model haiku` (cheapest, fast)
+///   3. `codex exec` (if claude isn't installed)
+///   4. Anthropic Messages API directly if `ANTHROPIC_API_KEY` is set
+///   5. nil — Summary tab shows a "no summarizer available" hint
 ///
 /// Cached on disk by (jsonlPath, mtime) so each session only summarises once
 /// per significant change.
@@ -113,7 +114,8 @@ final class Summarizer {
         let previous = memory[path]?.text ?? loadDisk(path: path)?.text
         lock.unlock()
 
-        let summary = runClaudeCLI(content: content, previous: previous)
+        let summary = runOllama(content: content, previous: previous)
+                   ?? runClaudeCLI(content: content, previous: previous)
                    ?? runCodexCLI(content: content, previous: previous)
                    ?? runAnthropicAPI(content: content, previous: previous)
         guard let text = summary, !text.isEmpty else { return nil }
@@ -135,6 +137,15 @@ final class Summarizer {
             + "\n\nThe previous summary was: \"\(prev)\". "
             + "Replace it with the current activity from the latest turns below. "
             + "If nothing meaningful changed, return the previous summary unchanged."
+    }
+
+    // MARK: - Ollama (local)
+
+    private func runOllama(content: String, previous: String?) -> String? {
+        LocalLLM.complete(system: promptWithContinuity(previous: previous),
+                          user: content,
+                          maxTokens: 60,
+                          timeout: 20)
     }
 
     // MARK: - claude -p

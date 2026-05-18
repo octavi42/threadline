@@ -1294,7 +1294,7 @@ private struct SummaryView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 }
-                Text("Uses your installed `claude -p` or `codex exec` — no separate API key needed. Falls back to ANTHROPIC_API_KEY if both CLIs are missing.")
+                Text("Tries local Ollama first, then `claude -p` or `codex exec`, then ANTHROPIC_API_KEY. Local AI: \(LocalLLM.statusLabel).")
                     .font(.system(size: 11))
                     .foregroundColor(Color.secondary.opacity(0.8))
                     .frame(maxWidth: .infinity, alignment: .leading)
