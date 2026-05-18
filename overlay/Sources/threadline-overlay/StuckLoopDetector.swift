@@ -11,14 +11,18 @@ enum StuckLoopDetector {
     }
 
     static func analyze(jsonlPath: String, maxBytes: Int = 96 * 1024) -> Result? {
-        analyze(snippets: errorSnippets(fromJSONL: jsonlPath, maxBytes: maxBytes))
+        analyze(blocks: errorBlocks(fromJSONL: jsonlPath, maxBytes: maxBytes))
     }
 
     static func analyze(text: String) -> Result? {
-        let snippets = text
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map(String.init)
-            .filter(isErrorSnippet)
+        let snippets = uniqueErrorSnippets(in: text)
+        return analyze(snippets: snippets)
+    }
+
+    static func analyze(blocks: [String]) -> Result? {
+        let snippets = blocks
+            .filter { !isSuccessfulCodexToolOutput($0) }
+            .flatMap(uniqueErrorSnippets)
         return analyze(snippets: snippets)
     }
 
@@ -41,11 +45,28 @@ enum StuckLoopDetector {
         return Result(repeatCount: best.value, fingerprint: best.key)
     }
 
+    private static func uniqueErrorSnippets(in text: String) -> [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let s = String(line)
+            guard isErrorSnippet(s) else { continue }
+            let fp = fingerprint(s)
+            guard !fp.isEmpty, !seen.contains(fp) else { continue }
+            seen.insert(fp)
+            out.append(s)
+        }
+        if out.isEmpty, isErrorSnippet(text) {
+            out.append(text)
+        }
+        return out
+    }
+
     // MARK: - JSONL extraction
 
-    private static func errorSnippets(fromJSONL path: String, maxBytes: Int) -> [String] {
+    private static func errorBlocks(fromJSONL path: String, maxBytes: Int) -> [String] {
         guard let tail = tailOfFile(path: path, maxBytes: maxBytes) else { return [] }
-        var snippets: [String] = []
+        var blocks: [String] = []
 
         for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(raw).data(using: .utf8),
@@ -53,7 +74,7 @@ enum StuckLoopDetector {
             else { continue }
 
             if let message = obj["message"] as? [String: Any] {
-                appendClaudeErrors(message, into: &snippets)
+                appendClaudeErrors(message, into: &blocks)
                 continue
             }
 
@@ -62,32 +83,35 @@ enum StuckLoopDetector {
 
             if type == "response_item", payload["type"] as? String == "function_call_output",
                let output = payload["output"] as? String {
-                appendErrorBlock(output, into: &snippets)
+                if isSuccessfulCodexToolOutput(output) { continue }
+                appendErrorBlock(output, into: &blocks)
             }
         }
 
-        return snippets
+        return blocks
     }
 
-    private static func appendClaudeErrors(_ message: [String: Any], into snippets: inout [String]) {
+    private static func appendClaudeErrors(_ message: [String: Any], into blocks: inout [String]) {
         guard let content = message["content"] as? [[String: Any]] else { return }
         for block in content {
             guard block["type"] as? String == "tool_result",
                   let text = block["content"] as? String
             else { continue }
-            appendErrorBlock(text, into: &snippets)
+            appendErrorBlock(text, into: &blocks)
         }
     }
 
-    private static func appendErrorBlock(_ text: String, into snippets: inout [String]) {
-        let before = snippets.count
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let s = String(line)
-            if isErrorSnippet(s) { snippets.append(s) }
+    private static func appendErrorBlock(_ text: String, into blocks: inout [String]) {
+        if !uniqueErrorSnippets(in: text).isEmpty {
+            blocks.append(text)
         }
-        if snippets.count == before && isErrorSnippet(text) {
-            snippets.append(text)
-        }
+    }
+
+    private static func isSuccessfulCodexToolOutput(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("process exited with code 0")
+            || lower.contains("exit code: 0")
+            || lower.contains("exit status: 0")
     }
 
     // MARK: - heuristics
@@ -99,6 +123,14 @@ enum StuckLoopDetector {
 
         if lower.contains("no error") || lower.contains("without error") { return false }
         if lower.hasPrefix("reduced false stuck") { return false }
+        if lower.contains("same error repeated") { return false }
+        if lower.contains("status of stuck") { return false }
+        if lower.contains("status: stuck") { return false }
+        if lower.contains("stuckloopdetector") { return false }
+        if lower.contains("requestsdependencywarning") { return false }
+        if lower.contains("process exited with code 0") { return false }
+        if lower.contains("exit code: 0") || lower.contains("exit status: 0") { return false }
+        if lower.contains("0 failures") || lower.contains("with 0 failures") { return false }
 
         let needles = [
             "error:", "error ", " failed", "failed:", "failure",

@@ -114,6 +114,25 @@ final class CodexSourceTests: XCTestCase {
     }
 }
 
+final class SessionTranscriptTests: XCTestCase {
+    func testSharedTranscriptParsesClaudeFixture() throws {
+        let path = try fixture("claude_simple.jsonl")
+        let transcript = try XCTUnwrap(SessionTranscriptCache.transcript(fromJSONL: path))
+
+        XCTAssertEqual(transcript.openingGoal, "Help me refactor auth")
+        XCTAssertTrue(transcript.summaryText?.contains("assistant: Done with the auth read") == true)
+        XCTAssertTrue(transcript.summaryText?.contains("tool: Edit auth.swift") == true)
+    }
+
+    func testSharedTranscriptParsesCodexFixture() throws {
+        let path = try fixture("codex_tests_passed.jsonl")
+        let transcript = try XCTUnwrap(SessionTranscriptCache.transcript(fromJSONL: path))
+
+        XCTAssertNotNil(transcript.evidenceText)
+        XCTAssertTrue(transcript.evidenceText?.lowercased().contains("swift test") == true)
+    }
+}
+
 final class WorkStatusResolverTests: XCTestCase {
     func testNeedsYouBeatsCodeRiskWhenBlocked() {
         var snap = baseSnapshot(state: .idle)
@@ -331,16 +350,49 @@ final class WorkStatusStabilityTests: XCTestCase {
 }
 
 final class StuckLoopDetectorTests: XCTestCase {
-    func testDetectsRepeatedErrorsInPlainText() {
+    func testDetectsRepeatedErrorsAcrossOutputBlocks() {
+        let result = StuckLoopDetector.analyze(blocks: [
+            "error: cannot find 'Foo' in scope\nfile: /tmp/a.swift:1:1",
+            "error: cannot find 'Foo' in scope\nfile: /tmp/b.swift:2:1",
+            "error: cannot find 'Foo' in scope\nfile: /tmp/c.swift:3:1",
+            "error: cannot find 'Foo' in scope\nfile: /tmp/d.swift:4:1",
+        ])
+        XCTAssertEqual(result?.repeatCount, 4)
+        XCTAssertEqual(StuckLoopDetector.reason(for: result!), "same error repeated 4×")
+    }
+
+    func testRepeatedLinesInsideOneOutputBlockAreNotStuck() {
         let text = """
         error: cannot find 'Foo' in scope
         error: cannot find 'Foo' in scope
         error: cannot find 'Foo' in scope
         error: cannot find 'Foo' in scope
         """
-        let result = StuckLoopDetector.analyze(text: text)
-        XCTAssertEqual(result?.repeatCount, 4)
-        XCTAssertEqual(StuckLoopDetector.reason(for: result!), "same error repeated 4×")
+        XCTAssertNil(StuckLoopDetector.analyze(text: text))
+    }
+
+    func testDiscussionOfStuckStatusIsNotStuckEvidence() {
+        let text = """
+        now for some reason on some session I keep getting the status of stuck even tho it is not stuck
+        same error repeated 13x
+        """
+        XCTAssertNil(StuckLoopDetector.analyze(text: text))
+    }
+
+    func testSuccessfulCodexCommandOutputsAreNotStuckEvidence() {
+        let output = """
+        Chunk ID: abc
+        Wall time: 0.0000 seconds
+        Process exited with code 0
+        Output:
+        Test Suite 'All tests' passed.
+        Executed 51 tests, with 0 failures (0 unexpected).
+        error: cannot find 'Foo' in scope
+        error: cannot find 'Foo' in scope
+        error: cannot find 'Foo' in scope
+        """
+
+        XCTAssertNil(StuckLoopDetector.analyze(blocks: [output, output, output]))
     }
 
     func testTwoRepeatsIsNotStuck() {

@@ -320,65 +320,20 @@ final class Summarizer {
 
     // MARK: - prompt building
 
-    /// Read the WHOLE JSONL and extract every human-readable user/assistant
-    /// turn (tool-use noise stripped). If the total exceeds the prompt
-    /// budget, keep the head and the tail with an ellipsis between so the
-    /// LLM sees both how the session opened and the recent activity.
+    /// Read the shared normalized transcript and build a summary prompt. If
+    /// the total exceeds the prompt budget, keep the head and the tail with an
+    /// ellipsis between so the LLM sees both how the session opened and the
+    /// recent activity.
     private func buildPrompt(from path: String, context: SummaryContext?) -> String? {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return nil
-        }
-        var snippets: [String] = []
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = String(raw).data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
-            // Claude shape
-            if let msg = obj["message"] as? [String: Any] {
-                let role = msg["role"] as? String ?? ""
-                if let content = msg["content"] as? [[String: Any]] {
-                    for block in content {
-                        switch block["type"] as? String {
-                        case "text":
-                            if let t = block["text"] as? String,
-                               !t.isEmpty, !t.hasPrefix("<"),
-                               !Self.shouldDiscardSnippet(t) {
-                                snippets.append("\(role): \(t)")
-                            }
-                        case "tool_use":
-                            if let line = Self.toolUseLine(block) {
-                                snippets.append("tool: \(line)")
-                            }
-                        default:
-                            break
-                        }
-                    }
-                } else if let s = msg["content"] as? String,
-                          !s.isEmpty, !Self.shouldDiscardSnippet(s) {
-                    snippets.append("\(role): \(s)")
-                }
-                continue
-            }
-            // Codex shape
-            if obj["type"] as? String == "event_msg",
-               let payload = obj["payload"] as? [String: Any] {
-                let et = payload["type"] as? String
-                if (et == "agent_message" || et == "user_message"),
-                   let m = payload["message"] as? String,
-                   !m.isEmpty, !Self.shouldDiscardSnippet(m) {
-                    let role = et == "user_message" ? "user" : "assistant"
-                    snippets.append("\(role): \(m)")
-                }
-            }
-        }
-        if snippets.isEmpty, context == nil { return nil }
+        let transcriptText = SessionTranscriptCache.transcript(fromJSONL: path)?.summaryText
+        if transcriptText == nil, context == nil { return nil }
 
         var parts: [String] = []
         if let ctx = context {
             parts.append(Self.contextHeader(ctx))
         }
-        if !snippets.isEmpty {
-            parts.append(snippets.joined(separator: "\n\n"))
+        if let transcriptText = transcriptText, !transcriptText.isEmpty {
+            parts.append(transcriptText)
         }
         let joined = parts.joined(separator: "\n\n---\n\n")
         if joined.isEmpty { return nil }
@@ -405,23 +360,7 @@ final class Summarizer {
     // MARK: - quality helpers (testable)
 
     static func shouldDiscardSnippet(_ text: String) -> Bool {
-        let lower = text.lowercased()
-        let noise = [
-            "summarize this coding-assistant session",
-            "summarize this claude code session transcript",
-            "summarise this session",
-            "return one short present-tense line",
-            "maximum 12 words",
-            "classify the session from stdin",
-            "uses your installed `claude -p`",
-            "x-ray analysis",
-        ]
-        if noise.contains(where: { lower.contains($0) }) { return true }
-        if lower.hasPrefix("i've made the current session") { return true }
-        if lower.hasPrefix("i've made the following changes") { return true }
-        if lower.hasPrefix("the current state of the project") { return true }
-        if lower.hasPrefix("the project's current focus is on") { return true }
-        return false
+        SessionTranscript.shouldDiscardSnippet(text)
     }
 
     static func isLowQuality(_ summary: String) -> Bool {
@@ -476,37 +415,11 @@ final class Summarizer {
     }
 
     static func extractOpeningGoal(from path: String) -> String? {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: true).prefix(80) {
-            guard let data = String(raw).data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
-
-            if let msg = obj["message"] as? [String: Any], msg["role"] as? String == "user" {
-                if let content = msg["content"] as? [[String: Any]] {
-                    for block in content where block["type"] as? String == "text" {
-                        if let t = block["text"] as? String,
-                           let goal = substantiveUserText(t) { return goal }
-                    }
-                } else if let s = msg["content"] as? String,
-                          let goal = substantiveUserText(s) { return goal }
-            }
-
-            if obj["type"] as? String == "event_msg",
-               let payload = obj["payload"] as? [String: Any],
-               payload["type"] as? String == "user_message",
-               let m = payload["message"] as? String,
-               let goal = substantiveUserText(m) { return goal }
-        }
-        return nil
+        SessionTranscriptCache.transcript(fromJSONL: path)?.openingGoal
     }
 
     private static func substantiveUserText(_ text: String) -> String? {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleaned.count >= 12, !shouldDiscardSnippet(cleaned) else { return nil }
-        let lower = cleaned.lowercased()
-        if lower == "yes" || lower == "continue" || lower == "go ahead" { return nil }
-        return cleaned
+        SessionTranscript.substantiveUserText(text)
     }
 
     static func acceptedBrief(_ llm: String) -> String? {

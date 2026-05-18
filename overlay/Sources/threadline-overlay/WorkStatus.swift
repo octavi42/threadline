@@ -22,14 +22,11 @@ struct WorkState: Equatable {
 }
 
 enum WorkStatusResolver {
-    private static let transcriptCacheLock = NSLock()
-    private static var transcriptCache: [String: (mtime: Date, text: String?)] = [:]
-
     /// Snapshot metadata plus recent JSONL transcript text used for tagging.
     static func evidenceText(for snap: SourceSnapshot) -> String {
         var parts = [searchableText(snap)]
         if let path = snap.jsonlPath,
-           let tail = transcriptEvidence(fromJSONL: path) {
+           let tail = SessionTranscriptCache.transcript(fromJSONL: path, maxBytes: 96 * 1024)?.evidenceText {
             parts.append(tail)
         }
         return parts.joined(separator: "\n").lowercased()
@@ -221,108 +218,6 @@ enum WorkStatusResolver {
         .joined(separator: "\n")
     }
 
-    /// Human-readable lines from the JSONL tail (messages + test-related tool output).
-    private static func transcriptEvidence(fromJSONL path: String,
-                                           maxBytes: Int = 96 * 1024) -> String? {
-        guard let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-        else {
-            return parseTranscriptEvidence(fromJSONL: path, maxBytes: maxBytes)
-        }
-
-        transcriptCacheLock.lock()
-        if let hit = transcriptCache[path], hit.mtime == mtime {
-            let cached = hit.text
-            transcriptCacheLock.unlock()
-            return cached
-        }
-        transcriptCacheLock.unlock()
-
-        let parsed = parseTranscriptEvidence(fromJSONL: path, maxBytes: maxBytes)
-        transcriptCacheLock.lock()
-        transcriptCache[path] = (mtime, parsed)
-        transcriptCacheLock.unlock()
-        return parsed
-    }
-
-    private static func parseTranscriptEvidence(fromJSONL path: String,
-                                                maxBytes: Int) -> String? {
-        guard let tail = tailOfFile(path: path, maxBytes: maxBytes) else { return nil }
-        var snippets: [String] = []
-
-        for raw in tail.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard let data = String(raw).data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
-
-            if let message = obj["message"] as? [String: Any] {
-                appendClaudeMessage(message, into: &snippets)
-                continue
-            }
-
-            let type = obj["type"] as? String ?? ""
-            let payload = obj["payload"] as? [String: Any] ?? [:]
-
-            if type == "event_msg" {
-                switch payload["type"] as? String {
-                case "agent_message", "user_message":
-                    if let msg = payload["message"] as? String, !msg.isEmpty {
-                        snippets.append(msg)
-                    }
-                default:
-                    break
-                }
-            } else if type == "response_item" {
-                switch payload["type"] as? String {
-                case "message":
-                    let content = payload["content"] as? [[String: Any]] ?? []
-                    for block in content {
-                        for key in ["text", "input_text", "output_text"] {
-                            if let t = block[key] as? String, !t.isEmpty {
-                                snippets.append(t)
-                            }
-                        }
-                    }
-                case "function_call_output":
-                    if let output = payload["output"] as? String,
-                       transcriptOutputIsRelevant(output) {
-                        snippets.append(output)
-                    }
-                default:
-                    break
-                }
-            }
-        }
-
-        guard !snippets.isEmpty else { return nil }
-        return snippets.joined(separator: "\n")
-    }
-
-    private static func appendClaudeMessage(_ message: [String: Any],
-                                            into snippets: inout [String]) {
-        if let content = message["content"] as? [[String: Any]] {
-            for block in content {
-                if block["type"] as? String == "text",
-                   let t = block["text"] as? String,
-                   !t.isEmpty, !t.hasPrefix("<") {
-                    snippets.append(t)
-                }
-            }
-        } else if let s = message["content"] as? String, !s.isEmpty {
-            snippets.append(s)
-        }
-    }
-
-    private static func transcriptOutputIsRelevant(_ output: String) -> Bool {
-        let lower = output.lowercased()
-        let needles = [
-            "swift test", "pytest", "npm test", "yarn test", "cargo test",
-            "vitest", "jest", "go test", "exit code", "exit status",
-            "tests pass", "test pass", "tests failed", "test failed",
-            "0 failures", "conclusion", "github action", "workflow run",
-        ]
-        return needles.contains { lower.contains($0) }
-    }
-
     // MARK: - signals
 
     private static func isHelperNoise(_ snap: SourceSnapshot) -> Bool {
@@ -416,9 +311,7 @@ enum WorkStatusResolver {
     }
 
     private static func hasRetryLoopSignal(_ text: String) -> Bool {
-        if text.contains("same error") { return true }
         let phrases = [
-            "same error repeated",
             "same error again",
             "retry loop",
             "keeps failing with the same",
@@ -431,7 +324,7 @@ enum WorkStatusResolver {
         if let loop = stuckLoop(from: snap, text: text) {
             return StuckLoopDetector.reason(for: loop)
         }
-        if text.contains("same error") || hasRetryLoopSignal(text) {
+        if hasRetryLoopSignal(text) {
             return "same error repeated"
         }
         return "stale with work in progress"
