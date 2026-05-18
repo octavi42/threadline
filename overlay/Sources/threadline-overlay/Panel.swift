@@ -41,15 +41,16 @@ final class OverlayController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.titlebarAppearsTransparent = true
-
-        let host = NSHostingView(rootView: ContentView(model: model))
-        host.translatesAutoresizingMaskIntoConstraints = false
-        panel.contentView = host
         panel.minSize = NSSize(width: 520, height: 320)
         panel.setFrameAutosaveName("ThreadlinePanel")
         panel.delegate = OverlayController.persistenceDelegate
 
         self.panel = panel
+        let host = NSHostingView(rootView: ContentView(model: model) { [weak self] snap in
+            _ = self?.jump(to: snap)
+        })
+        host.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView = host
         panel.onReturnKey = { [weak self] in
             _ = self?.jumpToSelection()
         }
@@ -102,8 +103,8 @@ final class OverlayController {
     }
 
     @discardableResult
-    func jumpToSelection() -> Bool {
-        guard let result = jumpResult() else {
+    func jump(to snapshot: SourceSnapshot) -> Bool {
+        guard let result = JumpBack.jump(to: snapshot) else {
             NSSound.beep()
             return false
         }
@@ -113,21 +114,27 @@ final class OverlayController {
         return true
     }
 
+    @discardableResult
+    func jumpToSelection() -> Bool {
+        guard let snap = model.selectedSnapshot ?? model.selectedFolder?.latestSnapshot else {
+            NSSound.beep()
+            return false
+        }
+        return jump(to: snap)
+    }
+
     func jumpToSelectionMessage() -> String {
-        guard let result = jumpResult() else {
+        guard let snap = model.selectedSnapshot ?? model.selectedFolder?.latestSnapshot else {
+            NSSound.beep()
+            return "no jump target"
+        }
+        guard let result = JumpBack.jump(to: snap) else {
             NSSound.beep()
             return "no jump target"
         }
         persistFrame()
         panel.orderOut(nil)
         return "jumped to \(result.appName) via \(result.detail)"
-    }
-
-    private func jumpResult() -> JumpBack.Result? {
-        if let snap = model.selectedSnapshot {
-            return JumpBack.jump(to: snap)
-        }
-        return JumpBack.jump(to: model.selectedFolder?.latestSnapshot)
     }
 
     @discardableResult

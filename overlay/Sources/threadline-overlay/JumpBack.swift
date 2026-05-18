@@ -9,6 +9,33 @@ enum JumpBack {
         let detail: String
     }
 
+    static func canJump(to snapshot: SourceSnapshot?) -> Bool {
+        guard let snapshot = snapshot else { return false }
+        if snapshot.tool == "Cursor" {
+            let cursorBundleIDs: Set<String> = [
+                "com.todesktop.230313mzl4w4u92",
+                "com.todesktop.230313mzl4w4u92-insider",
+            ]
+            if NSWorkspace.shared.runningApplications.contains(where: {
+                $0.bundleIdentifier.map(cursorBundleIDs.contains) ?? false
+            }) {
+                return true
+            }
+            if let cwd = snapshot.cwd, !cwd.isEmpty { return true }
+            return false
+        }
+        return app(for: snapshot) != nil
+    }
+
+    static func jumpLabel(for snapshot: SourceSnapshot) -> String {
+        if snapshot.tool == "Cursor" { return "Open Cursor workspace" }
+        if let tty = snapshot.tty, !tty.isEmpty { return "Open terminal tab" }
+        if let surfaceID = snapshot.terminalSurfaceID, !surfaceID.isEmpty {
+            return "Open terminal"
+        }
+        return "Open terminal or editor"
+    }
+
     static func jump(to snapshot: SourceSnapshot?) -> Result? {
         guard let snapshot = snapshot else { return nil }
 
