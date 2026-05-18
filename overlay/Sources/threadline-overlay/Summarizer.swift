@@ -130,12 +130,12 @@ final class Summarizer {
         lock.unlock()
         let safePrevious = previous.flatMap { Self.isLowQuality($0) ? nil : $0 }
 
-        let raw = runOllama(content: content, previous: safePrevious)
-               ?? runClaudeCLI(content: content, previous: safePrevious)
-               ?? runCodexCLI(content: content, previous: safePrevious)
-               ?? runAnthropicAPI(content: content, previous: safePrevious)
-
-        let summary = Self.pickedSummary(llm: raw, context: context, openingGoal: openingGoal)
+        let summary = firstAcceptedBrief(
+            content: content,
+            previous: safePrevious,
+            context: context,
+            openingGoal: openingGoal
+        )
         guard let text = summary, !text.isEmpty else { return nil }
         let normalized = SourceSnapshot.normalizeBrief(text)
         let entry = CacheEntry(mtime: mtime, text: normalized)
@@ -155,6 +155,25 @@ final class Summarizer {
             + "\n\nThe previous brief was: \"\(prev)\". "
             + "Update it from the latest turns below. "
             + "If nothing meaningful changed, return the previous brief unchanged."
+    }
+
+    /// Try each LLM backend; use the first response that passes quality checks.
+    private func firstAcceptedBrief(content: String,
+                                    previous: String?,
+                                    context: SummaryContext?,
+                                    openingGoal: String?) -> String? {
+        let runners: [() -> String?] = [
+            { self.runOllama(content: content, previous: previous) },
+            { self.runClaudeCLI(content: content, previous: previous) },
+            { self.runCodexCLI(content: content, previous: previous) },
+            { self.runAnthropicAPI(content: content, previous: previous) },
+        ]
+        for run in runners {
+            if let raw = run(), let accepted = Self.acceptedBrief(raw) {
+                return accepted
+            }
+        }
+        return Self.structuralFallback(context: context, openingGoal: openingGoal)
     }
 
     // MARK: - Ollama (local)
@@ -490,14 +509,10 @@ final class Summarizer {
         return cleaned
     }
 
-    private static func pickedSummary(llm: String?,
-                                      context: SummaryContext?,
-                                      openingGoal: String?) -> String? {
-        if let llm = llm?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !llm.isEmpty, !isLowQuality(llm) {
-            return llm
-        }
-        return structuralFallback(context: context, openingGoal: openingGoal)
+    static func acceptedBrief(_ llm: String) -> String? {
+        let trimmed = llm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isLowQuality(trimmed) else { return nil }
+        return trimmed
     }
 
     private static func contextHeader(_ ctx: SummaryContext) -> String {

@@ -4,20 +4,17 @@ import XCTest
 /// Live Ollama tests — run with:
 ///   THREADLINE_OLLAMA_INTEGRATION=1 THREADLINE_OLLAMA_MODEL=qwen2.5vl:7b swift test --filter LocalLLMIntegration
 final class LocalLLMIntegrationTests: XCTestCase {
-    override func setUp() {
-        guard ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_INTEGRATION"] == "1" else {
-            return
-        }
+    override func setUpWithError() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_INTEGRATION"] == "1",
+            "Set THREADLINE_OLLAMA_INTEGRATION=1 and run Ollama"
+        )
         if let model = ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_MODEL"] {
             setenv("THREADLINE_OLLAMA_MODEL", model, 1)
         }
     }
 
     func testLiveSummary() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_INTEGRATION"] == "1",
-            "Set THREADLINE_OLLAMA_INTEGRATION=1 and run Ollama"
-        )
         let text = LocalLLM.complete(
             system: "Return one short present-tense line. Maximum 12 words. No preamble.",
             user: "user: refactor auth middleware\nassistant: editing auth.swift",
@@ -30,10 +27,6 @@ final class LocalLLMIntegrationTests: XCTestCase {
     }
 
     func testLiveClassifyJSON() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_INTEGRATION"] == "1",
-            "Set THREADLINE_OLLAMA_INTEGRATION=1 and run Ollama"
-        )
         let system = """
         Return only one JSON object with keys status, reason, nextAction. \
         status must be one of: Needs you, Tests failed, Stuck, Risky, Ready, Working, Done.
@@ -53,10 +46,6 @@ final class LocalLLMIntegrationTests: XCTestCase {
     }
 
     func testSummarizerEndToEnd() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["THREADLINE_OLLAMA_INTEGRATION"] == "1",
-            "Set THREADLINE_OLLAMA_INTEGRATION=1 and run Ollama"
-        )
         let source = try integrationFixture("claude_simple.jsonl")
         let tmp = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("threadline-ollama-\(UUID().uuidString).jsonl")

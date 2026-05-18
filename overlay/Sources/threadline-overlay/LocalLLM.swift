@@ -2,12 +2,17 @@ import Foundation
 
 /// Optional local summarizer/classifier via Ollama (`http://127.0.0.1:11434`).
 ///
-/// Disabled when Ollama is unreachable (probed once per app launch) or when
-/// `THREADLINE_DISABLE_OLLAMA=1`. Configure with env vars or `~/.threadline/config.json`:
-/// `ollama_host`, `ollama_model`.
+/// Configure with env vars or `~/.threadline/config.json`: `ollama_host`, `ollama_model`.
+/// Set `THREADLINE_DISABLE_OLLAMA=1` to skip entirely.
 enum LocalLLM {
     private static let lock = NSLock()
+    private static let probeLock = NSLock()
     private static var availability: Availability = .unknown
+    private static var probeFinished = false
+    private static var probeSucceeded = false
+    private static var unavailableUntil: Date?
+    /// Re-probe after a failed reachability check or chat HTTP failure.
+    private static let retryInterval: TimeInterval = 5 * 60
 
     private enum Availability {
         case unknown
@@ -16,13 +21,18 @@ enum LocalLLM {
     }
 
     static var statusLabel: String {
-        guard !isExplicitlyDisabled else { return "off" }
+        if isExplicitlyDisabled { return "disabled" }
         lock.lock()
         let state = availability
+        let retrying = unavailableUntil
         lock.unlock()
         switch state {
         case .available: return "on (\(model))"
-        case .unavailable: return "off"
+        case .unavailable:
+            if let until = retrying, Date() < until {
+                return "unreachable"
+            }
+            return "off"
         case .unknown: return "checking"
         }
     }
@@ -57,16 +67,23 @@ enum LocalLLM {
 
         let semaphore = DispatchSemaphore(value: 0)
         var responseText: String?
+        var httpOK = false
         URLSession.shared.dataTask(with: req) { data, response, _ in
             defer { semaphore.signal() }
-            guard let data = data,
-                  let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode),
-                  let text = parseChatResponse(data)
-            else { return }
+            guard let http = response as? HTTPURLResponse else { return }
+            httpOK = (200...299).contains(http.statusCode)
+            guard httpOK,
+                  let data = data,
+                  let text = parseChatResponse(data) else { return }
             responseText = text
         }.resume()
         _ = semaphore.wait(timeout: .now() + timeout + 1)
+
+        if !httpOK {
+            markUnreachable()
+            return nil
+        }
+
         guard let text = responseText?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { return nil }
         return text
@@ -81,21 +98,48 @@ enum LocalLLM {
 
     private static func ensureAvailable(probeTimeout: TimeInterval) -> Bool {
         lock.lock()
-        switch availability {
-        case .available:
+        if availability == .available {
             lock.unlock()
             return true
-        case .unavailable:
+        }
+        if availability == .unavailable,
+           let until = unavailableUntil, Date() < until {
             lock.unlock()
             return false
-        case .unknown:
-            lock.unlock()
-            let ok = probe(timeout: probeTimeout)
-            lock.lock()
-            availability = ok ? .available : .unavailable
-            lock.unlock()
-            return ok
         }
+        if availability == .unavailable {
+            availability = .unknown
+            probeFinished = false
+        }
+        lock.unlock()
+
+        probeLock.lock()
+        if !probeFinished {
+            let ok = probe(timeout: probeTimeout)
+            probeSucceeded = ok
+            probeFinished = true
+            lock.lock()
+            if ok {
+                availability = .available
+                unavailableUntil = nil
+            } else {
+                availability = .unavailable
+                unavailableUntil = Date().addingTimeInterval(retryInterval)
+            }
+            lock.unlock()
+        }
+        let result = probeSucceeded
+        probeLock.unlock()
+        return result
+    }
+
+    private static func markUnreachable() {
+        lock.lock()
+        availability = .unavailable
+        unavailableUntil = Date().addingTimeInterval(retryInterval)
+        probeFinished = true
+        probeSucceeded = false
+        lock.unlock()
     }
 
     private static func probe(timeout: TimeInterval) -> Bool {

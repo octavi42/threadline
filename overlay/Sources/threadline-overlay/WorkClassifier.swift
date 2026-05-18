@@ -72,11 +72,7 @@ final class WorkClassifier {
 
     private func fetchAndCache(snap: SourceSnapshot, path: String, mtime: Date) -> WorkState? {
         guard let evidence = buildEvidence(snap: snap, path: path) else { return nil }
-        let raw = runOllama(evidence: evidence)
-               ?? runClaudeCLI(evidence: evidence)
-               ?? runCodexCLI(evidence: evidence)
-               ?? runAnthropicAPI(evidence: evidence)
-        guard let work = parseWorkState(raw) else { return nil }
+        guard let work = firstParsedWorkState(from: evidence) else { return nil }
         let entry = CacheEntry(mtime: mtime, work: work)
         lock.lock()
         memory[path] = entry
@@ -227,6 +223,22 @@ final class WorkClassifier {
         Recent turns:
         \(recentTurns.isEmpty ? "none" : recentTurns)
         """
+    }
+
+    /// Try each backend until one returns parseable classification JSON.
+    private func firstParsedWorkState(from evidence: String) -> WorkState? {
+        let runners: [() -> String?] = [
+            { self.runOllama(evidence: evidence) },
+            { self.runClaudeCLI(evidence: evidence) },
+            { self.runCodexCLI(evidence: evidence) },
+            { self.runAnthropicAPI(evidence: evidence) },
+        ]
+        for run in runners {
+            if let raw = run(), let work = parseWorkState(raw) {
+                return work
+            }
+        }
+        return nil
     }
 
     private func parseWorkState(_ raw: String?) -> WorkState? {

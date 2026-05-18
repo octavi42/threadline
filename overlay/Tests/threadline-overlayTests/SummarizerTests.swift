@@ -49,6 +49,15 @@ final class SummarizerTests: XCTestCase {
         XCTAssertTrue(text?.contains("Panel.swift") == true)
     }
 
+    func testAcceptedBriefRejectsLowQuality() {
+        XCTAssertNil(Summarizer.acceptedBrief(
+            "I've made the following changes to ensure that the session text"
+        ))
+        XCTAssertNotNil(Summarizer.acceptedBrief(
+            "Adding Ollama support. Touched Summarizer.swift and tests pass."
+        ))
+    }
+
     func testNormalizeBriefAllowsMultipleSentences() {
         let brief = SourceSnapshot.normalizeBrief(
             "User asked to add local Ollama. Edited Summarizer.swift and tests pass."
