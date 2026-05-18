@@ -264,6 +264,9 @@ final class SessionModel: ObservableObject {
     /// File paths the user has expanded in the Files tab. Stored here so the
     /// 3-second refresh cycle doesn't reset the expansion state.
     @Published var expandedFiles: Set<String> = []
+    /// Project folders the user collapsed in the agents sidebar. Absence means
+    /// expanded; stored on the model so the 3-second refresh does not reset it.
+    @Published var collapsedFolderIDs: Set<String> = []
     private var timer: Timer?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
@@ -303,7 +306,10 @@ final class SessionModel: ObservableObject {
                               firstID: String?,
                               pollInterval: TimeInterval) {
         if all != snapshots { self.snapshots = all }
-        if folders != self.folders { self.folders = folders }
+        if folders != self.folders {
+            self.folders = folders
+            pruneCollapsedFolders(visible: folders.map(\.id))
+        }
         if selectedID == nil || selectedSnapshot == nil && selectedFolder == nil {
             selectedID = firstID
         }
@@ -519,5 +525,22 @@ final class SessionModel: ObservableObject {
         }
         selectedID = snap.id
         return true
+    }
+
+    func isFolderExpanded(_ folderID: String) -> Bool {
+        !collapsedFolderIDs.contains(folderID)
+    }
+
+    func toggleFolderExpansion(_ folderID: String) {
+        if collapsedFolderIDs.contains(folderID) {
+            collapsedFolderIDs.remove(folderID)
+        } else {
+            collapsedFolderIDs.insert(folderID)
+        }
+    }
+
+    private func pruneCollapsedFolders(visible folderIDs: [String]) {
+        let visibleSet = Set(folderIDs)
+        collapsedFolderIDs = collapsedFolderIDs.intersection(visibleSet)
     }
 }
