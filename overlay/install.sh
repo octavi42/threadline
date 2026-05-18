@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# threadline-overlay one-line installer.
+# threadline-overlay installer.
 #
-#   curl -fsSL https://…/install.sh | bash
+# One-liner (downloads script, clones repo, builds):
 #
-# Or from a clone:
+#   curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
+#
+# From a clone:
 #
 #   cd overlay && ./install.sh
 #
@@ -12,7 +14,25 @@
 
 set -euo pipefail
 
-here=$(cd "$(dirname "$0")" && pwd)
+REPO_URL="${THREADLINE_INSTALL_REPO:-https://github.com/octavi42/threadline.git}"
+REPO_REF="${THREADLINE_INSTALL_REF:-main}"
+
+resolve_overlay_dir() {
+    local script="${BASH_SOURCE[0]:-${0:-}}"
+    if [[ -n "$script" ]] && [[ "$script" != bash ]] && [[ "$script" != -bash ]] && [[ -f "$script" ]]; then
+        cd "$(dirname "$script")" && pwd
+        return
+    fi
+
+    echo "→ fetching Threadline source…"
+    local work
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$work/threadline"
+    echo "$work/threadline/overlay"
+}
+
+here=$(resolve_overlay_dir)
 target_bin="$HOME/.local/bin/threadline-overlay"
 
 # 1. Build.
@@ -42,4 +62,4 @@ esac
 echo
 echo "done."
 echo "  threadline-overlay show     # show the app window"
-echo "  threadline-overlay toggle   # show/hide"
+echo "  threadline-overlay toggle   # show/hide (⌃⌥⌘T)"

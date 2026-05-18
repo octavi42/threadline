@@ -10,13 +10,21 @@ sessions: Claude Code, Codex CLI, and Cursor.
 │ Codex   [assistant] `/Users/.../threadline`                  │
 │         ~/Projects/threadline · openai · 4m                  │
 │ Cursor  workspace active                                     │
-│         ~/Dev/contributions/geomind-mcp · 1d                 │
+│         ~/Projects/other-repo · 1d                             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Install (one command)
+## Install
 
-Requires Xcode 14+ / Swift 5.9+.
+Requires macOS 13+, Xcode 14+ / Swift 5.9+.
+
+**One-liner** (from the repo root on GitHub):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
+```
+
+**From a clone:**
 
 ```bash
 cd overlay && ./install.sh
