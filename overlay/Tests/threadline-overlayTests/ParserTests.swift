@@ -315,6 +315,89 @@ final class WorkStatusResolverTests: XCTestCase {
     }
 }
 
+final class FileConflictDetectorTests: XCTestCase {
+    func testDetectsReadyVsRiskyOnSameFile() {
+        let folder = conflictFixture(
+            files: [
+                ("a", "Claude", .ready, ["src/auth.ts"]),
+                ("b", "Codex", .risky, ["src/auth.ts"]),
+            ]
+        )
+        let conflicts = folder.fileConflicts(workStates: [:])
+        XCTAssertEqual(conflicts.count, 1)
+        XCTAssertEqual(conflicts[0].fileName, "auth.ts")
+        XCTAssertEqual(conflicts[0].recommendedSnapshotID, "a")
+        XCTAssertEqual(conflicts[0].suggestion, "Review Claude first")
+        XCTAssertEqual(conflicts[0].contributors.count, 2)
+    }
+
+    func testIgnoresSameStatusOnSharedFile() {
+        let folder = conflictFixture(
+            files: [
+                ("a", "Claude", .risky, ["src/auth.ts"]),
+                ("b", "Codex", .risky, ["src/auth.ts"]),
+            ]
+        )
+        XCTAssertTrue(folder.fileConflicts(workStates: [:]).isEmpty)
+    }
+
+    func testIgnoresSingleAgentFile() {
+        let folder = conflictFixture(
+            files: [
+                ("a", "Claude", .ready, ["src/auth.ts"]),
+            ]
+        )
+        XCTAssertTrue(folder.fileConflicts(workStates: [:]).isEmpty)
+    }
+
+    func testNeedsYouWinsRecommendation() {
+        let folder = conflictFixture(
+            files: [
+                ("a", "Claude", .needsYou, ["src/auth.ts"]),
+                ("b", "Codex", .ready, ["src/auth.ts"]),
+            ]
+        )
+        let conflict = folder.fileConflicts(workStates: [:]).first
+        XCTAssertEqual(conflict?.recommendedSnapshotID, "a")
+        XCTAssertEqual(conflict?.suggestion, "Answer Claude first")
+    }
+
+    private func conflictFixture(
+        files: [(id: String, tool: String, status: WorkStatus, paths: [String])]
+    ) -> SessionFolder {
+        let snapshots = files.map { entry -> SourceSnapshot in
+            var snap = SourceSnapshot(id: entry.id, tool: entry.tool, badge: "TST")
+            snap.cwd = "/tmp/project"
+            let reason = entry.status == .ready ? "tests passed" : "no test evidence"
+            snap.workState = WorkState(
+                status: entry.status,
+                reason: reason,
+                nextAction: "Review",
+                rank: workRank(entry.status)
+            )
+            snap.fileChanges = entry.paths.map { path in
+                FileChangeGroup(path: path, edits: [
+                    FileEditOp(seq: 0, tool: "Edit", timestamp: "")
+                ])
+            }
+            return snap
+        }
+        return SessionFolder(cwd: "/tmp/project", snapshots: snapshots)
+    }
+
+    private func workRank(_ status: WorkStatus) -> Int {
+        switch status {
+        case .needsYou: return 0
+        case .testsFailed: return 1
+        case .stuck: return 2
+        case .risky: return 3
+        case .ready: return 4
+        case .working: return 5
+        case .done: return 6
+        }
+    }
+}
+
 final class FolderTrustSummaryTests: XCTestCase {
     func testRollupLineOrdersByUrgency() {
         let folder = SessionFolder(

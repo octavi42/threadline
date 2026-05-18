@@ -368,6 +368,7 @@ private struct FolderDetailsPane: View {
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
+                    FolderConflictStripView(model: model, folder: folder)
                     FolderTrustBoardView(model: model, folder: folder)
                     FolderStatsView(folder: folder)
                     FolderTasksView(folder: folder)
@@ -399,6 +400,92 @@ private struct FolderDetailHeader: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(Color.secondary.opacity(0.7))
         }
+    }
+}
+
+private struct FolderConflictStripView: View {
+    @ObservedObject var model: SessionModel
+    let folder: SessionFolder
+
+    private var conflicts: [FileAgentConflict] {
+        folder.fileConflicts(workStates: model.workStates)
+    }
+
+    var body: some View {
+        if !conflicts.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("CONFLICTS")
+                Text("Same file, different trust — pick which agent to trust.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                ForEach(conflicts.prefix(5)) { conflict in
+                    FileConflictCard(conflict: conflict, model: model)
+                }
+                if conflicts.count > 5 {
+                    Text("\(conflicts.count - 5) more file conflicts")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct FileConflictCard: View {
+    let conflict: FileAgentConflict
+    @ObservedObject var model: SessionModel
+
+    var body: some View {
+        Button {
+            if let id = conflict.recommendedSnapshotID {
+                model.selectedID = id
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+                    Text(conflict.fileName)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    Text("·")
+                        .foregroundColor(.secondary)
+                    Text(conflict.toolsLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(conflict.contributors.filter {
+                        !WorkStatusResolver.isInactiveInbox($0.work)
+                    }, id: \.snapshotID) { contributor in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(workStatusColor(contributor.work.status))
+                                .frame(width: 6, height: 6)
+                            Text(contributor.summaryLine)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Text("→ \(conflict.suggestion)")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.10))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(red: 1.0, green: 0.78, blue: 0.10).opacity(0.35), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
