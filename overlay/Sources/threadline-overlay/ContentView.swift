@@ -24,6 +24,18 @@ private func sectionTitle(_ text: String) -> some View {
         .foregroundColor(.secondary)
 }
 
+private func workStatusColor(_ status: WorkStatus) -> Color {
+    switch status {
+    case .needsYou:     return Color(red: 1.0, green: 0.55, blue: 0.10)
+    case .testsFailed:  return Color(red: 1.0, green: 0.30, blue: 0.30)
+    case .stuck:        return Color(red: 0.95, green: 0.35, blue: 0.65)
+    case .risky:        return Color(red: 1.0, green: 0.78, blue: 0.10)
+    case .ready:        return Color(red: 0.30, green: 0.85, blue: 0.45)
+    case .working:      return Color(red: 0.40, green: 0.70, blue: 1.0)
+    case .done:         return .secondary
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var model: SessionModel
     @State private var tab: DetailTab = .overview
@@ -164,22 +176,36 @@ private struct AgentRow: View {
     let snap: SourceSnapshot
     let summary: String?
     var body: some View {
+        let work = WorkStatusResolver.resolve(snap)
         HStack(alignment: .top, spacing: 8) {
-            StateDot(state: snap.state).frame(width: 7, height: 7).padding(.top, 4)
+            Circle()
+                .fill(workStatusColor(work.status))
+                .frame(width: 7, height: 7)
+                .padding(.top, 4)
             BadgeView(label: snap.badge, color: badgeColor(snap.tool)).padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
-                Text(snap.projectName)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                // Prefer the LLM-generated summary; fall back to the
-                // activity heuristic until it arrives.
-                Text(secondaryLine)
-                    .font(.system(size: 10, design: .default))
+                HStack(spacing: 6) {
+                    Text(snap.tool)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Text(work.status.rawValue)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(workStatusColor(work.status))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                Text(work.reason)
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let s = secondaryLine {
+                    Text(s)
+                        .font(.system(size: 10))
+                        .foregroundColor(Color.secondary.opacity(0.75))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             Spacer(minLength: 4)
             Text(snap.timeAgoShort)
@@ -189,11 +215,12 @@ private struct AgentRow: View {
         }
         .padding(.vertical, 4)
     }
-    private var secondaryLine: String {
+    private var secondaryLine: String? {
         if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
             return s
         }
-        return snap.activityLine
+        let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback == "—" ? nil : fallback
     }
 }
 
@@ -480,9 +507,12 @@ private struct FolderFilesView: View {
 private struct DetailHeader: View {
     let snap: SourceSnapshot
     var body: some View {
+        let work = WorkStatusResolver.resolve(snap)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                StateDot(state: snap.state).frame(width: 10, height: 10)
+                Circle()
+                    .fill(workStatusColor(work.status))
+                    .frame(width: 10, height: 10)
                 Text(snap.tool)
                     .font(.system(size: 20, weight: .semibold))
                 Text(snap.projectName)
@@ -505,7 +535,9 @@ private struct DetailHeader: View {
 private struct OverviewView: View {
     let snap: SourceSnapshot
     var body: some View {
+        let work = WorkStatusResolver.resolve(snap)
         VStack(alignment: .leading, spacing: 18) {
+            WorkSummaryView(snap: snap, work: work)
             statsGrid
             if let task = snap.currentTask, !task.isEmpty {
                 section(label: "Current task", text: task)
@@ -573,6 +605,100 @@ private struct OverviewView: View {
                 .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct WorkSummaryView: View {
+    let snap: SourceSnapshot
+    let work: WorkState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(work.status.rawValue)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(workStatusColor(work.status))
+                Text(work.reason)
+                    .font(.system(size: 13))
+                    .foregroundColor(.primary)
+                Spacer()
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 2),
+                     alignment: .leading, spacing: 12) {
+                item("changed", changedText)
+                item("evidence", evidenceText)
+                item("risk", riskText)
+                item("next action", work.nextAction)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(workStatusColor(work.status).opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(workStatusColor(work.status).opacity(0.28), lineWidth: 0.5)
+        )
+    }
+
+    private var changedText: String {
+        let fileCount = max(snap.fileChanges.count, snap.filesEdited.count)
+        if fileCount > 0 {
+            return "\(fileCount) file\(fileCount == 1 ? "" : "s")"
+        }
+        if let dirty = snap.dirtyCount, dirty > 0 {
+            return "\(dirty) dirty file\(dirty == 1 ? "" : "s")"
+        }
+        return "none detected"
+    }
+
+    private var evidenceText: String {
+        switch work.status {
+        case .ready:
+            return "tests passed"
+        case .testsFailed:
+            return "tests failed"
+        case .risky:
+            return "no tests found"
+        case .needsYou:
+            return "blocked"
+        case .stuck:
+            return "retries/errors"
+        case .working:
+            return "in progress"
+        case .done:
+            return WorkStatusResolver.hasCodeChanges(snap) ? "unknown" : "not code"
+        }
+    }
+
+    private var riskText: String {
+        switch work.status {
+        case .ready:
+            return "low"
+        case .risky, .testsFailed, .stuck:
+            return "needs review"
+        case .needsYou:
+            return "needs input"
+        case .working:
+            return "not finished"
+        case .done:
+            return WorkStatusResolver.hasCodeChanges(snap) ? "unknown" : "none"
+        }
+    }
+
+    private func item(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.5)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 }

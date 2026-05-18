@@ -277,15 +277,10 @@ final class SessionModel: ObservableObject {
         let liveIDs = Set(all.map { $0.id })
         all.append(contentsOf: HistorySource.readAll(since: historyCutoff, excluding: liveIDs))
 
-        // Most recently active first; running > others within the same time bucket.
-        all.sort { a, b in
-            let ad = a.updatedAt ?? .distantPast
-            let bd = b.updatedAt ?? .distantPast
-            if abs(ad.timeIntervalSince(bd)) < 1 {
-                return rank(a.state) < rank(b.state)
-            }
-            return ad > bd
-        }
+        all = all.filter(WorkStatusResolver.shouldDisplay)
+
+        // Inbox order: human-attention state first, recency second.
+        all.sort(by: WorkStatusResolver.sort)
         let firstID = all.first?.id
         let folders = makeFolders(from: all)
         DispatchQueue.main.async { [weak self] in
@@ -311,27 +306,18 @@ final class SessionModel: ObservableObject {
             normalizedCwd(snap.cwd)
         }
         return grouped.map { cwd, snaps in
-            SessionFolder(cwd: cwd, snapshots: snaps.sorted(by: snapshotSort))
+            SessionFolder(cwd: cwd, snapshots: snaps.sorted(by: WorkStatusResolver.sort))
         }
         .sorted { a, b in
-            snapshotSort(a.latestSnapshot, b.latestSnapshot)
+            guard let la = a.latestSnapshot else { return false }
+            guard let lb = b.latestSnapshot else { return true }
+            return WorkStatusResolver.sort(la, lb)
         }
     }
 
     private func normalizedCwd(_ cwd: String?) -> String {
         guard let cwd = cwd, !cwd.isEmpty else { return "Unknown" }
         return (cwd as NSString).standardizingPath
-    }
-
-    private func snapshotSort(_ a: SourceSnapshot?, _ b: SourceSnapshot?) -> Bool {
-        guard let a = a else { return false }
-        guard let b = b else { return true }
-        let ad = a.updatedAt ?? .distantPast
-        let bd = b.updatedAt ?? .distantPast
-        if abs(ad.timeIntervalSince(bd)) < 1 {
-            return rank(a.state) < rank(b.state)
-        }
-        return ad > bd
     }
 
     private func kickoffSummary(for snap: SourceSnapshot) {
@@ -346,17 +332,6 @@ final class SessionModel: ObservableObject {
         )
         if let cached = cached, summaries[id] != cached {
             summaries[id] = cached
-        }
-    }
-
-    private func rank(_ s: SourceState) -> Int {
-        switch s {
-        case .running:  return 0
-        case .awaiting: return 1
-        case .idle:     return 2
-        case .error:    return 3
-        case .stale:    return 4
-        case .none:     return 5
         }
     }
 
