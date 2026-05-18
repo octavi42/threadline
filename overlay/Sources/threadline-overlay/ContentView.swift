@@ -501,7 +501,6 @@ private struct FolderTrustBoardView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.primary)
             }
-            FolderSubagentsView(model: model, folder: folder)
         }
     }
 }
@@ -512,7 +511,6 @@ private struct FolderStatsView: View {
     var body: some View {
         let stats = folder.stats
         let items: [(String, String?)] = [
-            ("subagents", "\(folder.snapshots.count)"),
             ("running", stats.running > 0 ? "\(stats.running)" : nil),
             ("awaiting", stats.awaiting > 0 ? "\(stats.awaiting)" : nil),
             ("tools", stats.toolsSummary.isEmpty ? nil : stats.toolsSummary),
@@ -536,64 +534,6 @@ private struct FolderStatsView: View {
                 }
             }
         }
-    }
-}
-
-private struct FolderSubagentsView: View {
-    @ObservedObject var model: SessionModel
-    let folder: SessionFolder
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("SUBAGENTS")
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(folder.snapshots) { snap in
-                    Button {
-                        model.selectedID = snap.id
-                    } label: {
-                        let work = model.workState(for: snap)
-                        HStack(alignment: .top, spacing: 8) {
-                            Circle()
-                                .fill(workStatusColor(work.status))
-                                .frame(width: 7, height: 7)
-                                .padding(.top, 4)
-                            BadgeView(label: snap.badge, color: badgeColor(snap.tool))
-                                .padding(.top, 1)
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(snap.tool)
-                                        .font(.system(size: 12, weight: .semibold))
-                                    Text(work.status.rawValue)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(workStatusColor(work.status))
-                                    Text(snap.metricsLine)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    Text(snap.timeAgoShort)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                }
-                                Text(summary(for: snap))
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func summary(for snap: SourceSnapshot) -> String {
-        if let s = model.summaries[snap.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !s.isEmpty {
-            return s
-        }
-        return snap.activityLine
     }
 }
 
