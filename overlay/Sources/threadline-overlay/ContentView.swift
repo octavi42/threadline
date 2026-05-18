@@ -602,12 +602,18 @@ private struct FolderProjectFileExpanded: View {
     @ObservedObject var model: SessionModel
     let maxEdits: Int
 
-    private var visibleEdits: [FileEditOp] {
+    private var visibleEdits: [MergedFileEdit] {
         Array(file.edits.prefix(maxEdits))
     }
 
     private var hiddenEditCount: Int {
         max(0, file.edits.count - visibleEdits.count)
+    }
+
+    private var contributingSnapshots: [SourceSnapshot] {
+        file.sourceSnapshotIDs.compactMap { id in
+            folder.snapshots.first { $0.id == id }
+        }
     }
 
     var body: some View {
@@ -619,33 +625,31 @@ private struct FolderProjectFileExpanded: View {
                 .truncationMode(.middle)
                 .textSelection(.enabled)
 
-            if !file.tools.isEmpty {
+            if !contributingSnapshots.isEmpty {
                 HStack(spacing: 6) {
-                    Text("Agents")
+                    Text("Sessions")
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundColor(.secondary)
-                    ForEach(file.tools, id: \.self) { tool in
-                        Button(tool) {
-                            if let id = folder.snapshotID(tool: tool, path: file.path) {
-                                model.selectedID = id
+                    ForEach(contributingSnapshots) { snap in
+                        Button {
+                            model.selectedID = snap.id
+                        } label: {
+                            HStack(spacing: 4) {
+                                BadgeView(label: snap.badge, color: badgeColor(snap.tool))
+                                Text(snap.tool)
+                                    .font(.system(size: 10, weight: .medium))
                             }
                         }
                         .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(badgeColor(tool).opacity(0.12))
-                        )
-                        .foregroundColor(badgeColor(tool))
+                        .foregroundColor(badgeColor(snap.tool))
+                        .help(snap.activityLine)
                     }
                 }
             }
 
             if file.hasDiffContent {
-                ForEach(visibleEdits) { op in
-                    EditOpView(op: op)
+                ForEach(visibleEdits) { merged in
+                    EditOpView(op: merged.op)
                 }
                 if hiddenEditCount > 0 {
                     Text("\(hiddenEditCount) more edit\(hiddenEditCount == 1 ? "" : "s") across agents")
