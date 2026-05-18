@@ -155,7 +155,6 @@ private struct AgentsList: View {
                             if model.isFolderExpanded(folder.id) {
                                 ForEach(Array(folder.snapshots.enumerated()), id: \.element.id) { index, snap in
                                     AgentRow(snap: snap,
-                                             summary: model.summaries[snap.id],
                                              workState: model.workState(for: snap))
                                         .padding(.leading, 12)
                                         .padding(.top, index == 0 ? 6 : 2)
@@ -255,13 +254,12 @@ private struct FolderHeader: View {
 
 private struct AgentRow: View {
     let snap: SourceSnapshot
-    let summary: String?
     let workState: WorkState?
     var body: some View {
         let work = workState ?? snap.workState
         HStack(alignment: .top, spacing: 6) {
             BadgeView(label: snap.badge, color: badgeColor(snap.tool)).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snap.tool)
                         .font(.system(size: 12, weight: .semibold))
@@ -271,23 +269,11 @@ private struct AgentRow: View {
                         .foregroundColor(workStatusColor(work.status))
                         .lineLimit(1)
                 }
-                Text(work.reason)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
                 if !work.nextAction.isEmpty {
                     Text("→ \(work.nextAction)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(workStatusColor(work.status).opacity(0.9))
                         .lineLimit(1)
-                }
-                if let s = secondaryLine {
-                    Text(s)
-                        .font(.system(size: 10))
-                        .foregroundColor(Color.secondary.opacity(0.75))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
             }
             Spacer(minLength: 4)
@@ -297,13 +283,6 @@ private struct AgentRow: View {
                 .padding(.top, 2)
         }
         .padding(.vertical, 4)
-    }
-    private var secondaryLine: String? {
-        if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return SourceSnapshot.briefHeadline(s)
-        }
-        let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallback == "—" ? nil : fallback
     }
 }
 
