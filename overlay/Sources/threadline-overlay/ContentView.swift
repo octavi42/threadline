@@ -67,12 +67,8 @@ private struct JumpButton: View {
         Button {
             onJump(snap)
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Open")
-                    .font(.system(size: 11, weight: .medium))
-            }
+            Text("Open")
+                .font(.system(size: 11, weight: .medium))
         }
         .buttonStyle(.plain)
         .foregroundColor(enabled ? .accentColor : .secondary)

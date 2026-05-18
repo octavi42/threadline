@@ -1,0 +1,38 @@
+---
+description: Rebuild and restart threadline-overlay after significant overlay changes
+globs: overlay/**
+alwaysApply: false
+---
+
+# Restart overlay after significant changes
+
+After you finish editing the macOS overlay in ways that affect runtime behavior or UI, **rebuild, reinstall, and relaunch** the app so the user can test immediately. Do this yourself — do not ask the user to restart manually.
+
+## What counts as significant
+
+Rebuild and restart when you change any of:
+
+- `overlay/Sources/**` (Swift UI, logic, daemon, CLI)
+- `overlay/Package.swift`
+- `overlay/install.sh`
+
+Skip a full restart for docs-only or comment-only edits under `overlay/` with no compiled output impact.
+
+## Restart procedure
+
+Run sequentially from the repo root:
+
+```bash
+~/.local/bin/threadline-overlay quit 2>/dev/null || true
+cd overlay && ./install.sh
+~/.local/bin/threadline-overlay show
+```
+
+If `~/.local/bin/threadline-overlay` is missing, run `cd overlay && ./install.sh` first.
+
+Confirm with `~/.local/bin/threadline-overlay status` that the daemon is running. Mention briefly in your reply that the app was restarted.
+
+## When not to reinstall
+
+- Python `src/threadline/**` or docs — different product surface; no overlay restart.
+- Overlay test-only changes: `swift test` is enough unless the user asked to verify in the live window.
