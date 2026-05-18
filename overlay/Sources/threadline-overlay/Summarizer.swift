@@ -1,6 +1,6 @@
 import Foundation
 
-/// Generates one-line "what this session is doing now" summaries.
+/// Generates a short session brief for the Overview tab (goal, progress, files).
 ///
 /// Auth model: shells out to the user's installed `claude` (`-p` print mode)
 /// or `codex` (`exec` non-interactive) CLI. That CLI uses whatever auth the
@@ -13,7 +13,7 @@ import Foundation
 ///   2. `claude -p --model haiku` (cheapest, fast)
 ///   3. `codex exec` (if claude isn't installed)
 ///   4. Anthropic Messages API directly if `ANTHROPIC_API_KEY` is set
-///   5. nil — Summary tab shows a "no summarizer available" hint
+///   5. nil — Overview shows a structural brief from snapshot metadata
 ///
 /// Cached on disk by (jsonlPath, mtime) so each session only summarises once
 /// per significant change.
@@ -59,11 +59,13 @@ final class Summarizer {
     /// Cap how many `claude -p` / `codex exec` processes run at once.
     private let processSemaphore = DispatchSemaphore(value: 2)
 
-    private static let summaryPrompt =
-        "Write one present-tense line (max 12 words) describing the developer's " +
-        "current coding task. Name concrete files, features, or commands when known. " +
-        "Do not describe summarization, Threadline, or internal variable names. " +
-        "No preamble, no meta commentary, no bullets."
+    private static let briefPrompt =
+        "Write a session brief so a developer returning later understands this " +
+        "coding session. Use 2-3 short sentences (max 45 words total). Sentence 1: " +
+        "what they asked the agent to work on (the goal). Sentence 2: what changed " +
+        "recently — name files or features. Optional sentence 3: blockers or next step " +
+        "only if obvious. Plain language. Never start with \"I've made the following " +
+        "changes\" or describe summarization/Threadline internals."
 
     private var cacheDir: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -82,16 +84,16 @@ final class Summarizer {
         lock.lock()
         if let hit = memory[path], hit.mtime == mtime {
             lock.unlock()
-            return SourceSnapshot.normalizeSummary(hit.text)
+            return SourceSnapshot.normalizeBrief(hit.text)
         }
         if let disk = loadDisk(path: path), disk.mtime == mtime {
-            let normalized = SourceSnapshot.normalizeSummary(disk.text)
+            let normalized = SourceSnapshot.normalizeBrief(disk.text)
             memory[path] = CacheEntry(mtime: disk.mtime, text: normalized)
             lock.unlock()
             return normalized
         }
         if inflight.contains(path) {
-            let stale = memory[path].map { SourceSnapshot.normalizeSummary($0.text) }
+            let stale = memory[path].map { SourceSnapshot.normalizeBrief($0.text) }
             lock.unlock()
             return stale
         }
@@ -110,14 +112,15 @@ final class Summarizer {
                 DispatchQueue.main.async { onUpdate(text) }
             }
         }
-        return memory[path].map { SourceSnapshot.normalizeSummary($0.text) }
+        return memory[path].map { SourceSnapshot.normalizeBrief($0.text) }
     }
 
     // MARK: - dispatch
 
     private func fetchAndCache(path: String, mtime: Date, context: SummaryContext?) -> String? {
+        let openingGoal = Self.extractOpeningGoal(from: path)
         guard let content = buildPrompt(from: path, context: context) else {
-            return Self.structuralFallback(context: context)
+            return Self.structuralFallback(context: context, openingGoal: openingGoal)
         }
 
         // Pull the prior summary (any mtime) so the prompt can evolve it
@@ -132,9 +135,9 @@ final class Summarizer {
                ?? runCodexCLI(content: content, previous: safePrevious)
                ?? runAnthropicAPI(content: content, previous: safePrevious)
 
-        let summary = Self.pickedSummary(llm: raw, context: context)
+        let summary = Self.pickedSummary(llm: raw, context: context, openingGoal: openingGoal)
         guard let text = summary, !text.isEmpty else { return nil }
-        let normalized = SourceSnapshot.normalizeSummary(text)
+        let normalized = SourceSnapshot.normalizeBrief(text)
         let entry = CacheEntry(mtime: mtime, text: normalized)
         lock.lock()
         memory[path] = entry
@@ -146,12 +149,12 @@ final class Summarizer {
     private func promptWithContinuity(previous: String?) -> String {
         guard let prev = previous?.trimmingCharacters(in: .whitespacesAndNewlines),
               !prev.isEmpty else {
-            return Summarizer.summaryPrompt
+            return Summarizer.briefPrompt
         }
-        return Summarizer.summaryPrompt
-            + "\n\nThe previous summary was: \"\(prev)\". "
-            + "Replace it with the current activity from the latest turns below. "
-            + "If nothing meaningful changed, return the previous summary unchanged."
+        return Summarizer.briefPrompt
+            + "\n\nThe previous brief was: \"\(prev)\". "
+            + "Update it from the latest turns below. "
+            + "If nothing meaningful changed, return the previous brief unchanged."
     }
 
     // MARK: - Ollama (local)
@@ -159,8 +162,8 @@ final class Summarizer {
     private func runOllama(content: String, previous: String?) -> String? {
         LocalLLM.complete(system: promptWithContinuity(previous: previous),
                           user: content,
-                          maxTokens: 60,
-                          timeout: 20)
+                          maxTokens: 120,
+                          timeout: 25)
     }
 
     // MARK: - claude -p
@@ -196,7 +199,7 @@ final class Summarizer {
         req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
         let payload: [String: Any] = [
             "model": "claude-haiku-4-5",
-            "max_tokens": 60,
+            "max_tokens": 120,
             "system": promptWithContinuity(previous: previous),
             "messages": [["role": "user", "content": content]],
         ]
@@ -396,6 +399,7 @@ final class Summarizer {
         ]
         if noise.contains(where: { lower.contains($0) }) { return true }
         if lower.hasPrefix("i've made the current session") { return true }
+        if lower.hasPrefix("i've made the following changes") { return true }
         if lower.hasPrefix("the current state of the project") { return true }
         if lower.hasPrefix("the project's current focus is on") { return true }
         return false
@@ -410,47 +414,90 @@ final class Summarizer {
             "these elements are crucial",
             "ensuring a seamless integration",
             "i've made the current session text",
+            "i've made the following changes",
             "more concise by limiting",
             "arrays to views like",
             "snap.tasksdone",
             "linesadded",
             "linesremoved",
             "ai coding agents, keeping track",
+            "session text in the",
         ]
         if fluff.contains(where: { lower.contains($0) }) { return true }
         if lower.hasPrefix("the ") && lower.contains(" involves ") { return true }
         return false
     }
 
-    static func structuralFallback(context: SummaryContext?) -> String? {
+    static func structuralFallback(context: SummaryContext?, openingGoal: String? = nil) -> String? {
         guard let ctx = context else { return nil }
-        if let task = ctx.currentTask?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !task.isEmpty {
-            return SourceSnapshot.normalizeSummary(task)
+        var sentences: [String] = []
+
+        if let goal = openingGoal?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !goal.isEmpty {
+            sentences.append("Goal: \(SourceSnapshot.compactLine(goal, limit: 140, maxWords: 22, firstSentence: false)).")
+        } else if let task = ctx.currentTask?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !task.isEmpty {
+            sentences.append("Goal: \(SourceSnapshot.compactLine(task, limit: 140, maxWords: 22, firstSentence: false)).")
         }
+
+        if !ctx.filesEdited.isEmpty {
+            let names = ctx.filesEdited.suffix(4).map { ($0 as NSString).lastPathComponent }
+            sentences.append("Touched \(names.joined(separator: ", ")).")
+        }
+
         if let tool = ctx.lastTool?.trimmingCharacters(in: .whitespacesAndNewlines),
            !tool.isEmpty {
-            return SourceSnapshot.normalizeSummary(tool)
+            sentences.append("Latest: \(SourceSnapshot.compactLine(tool, limit: 120, maxWords: 18, firstSentence: false)).")
+        } else if ctx.activityLine != "—" {
+            sentences.append(SourceSnapshot.compactLine(ctx.activityLine, limit: 140, maxWords: 22, firstSentence: false) + ".")
         }
-        if !ctx.filesEdited.isEmpty {
-            let names = ctx.filesEdited.suffix(2).map { ($0 as NSString).lastPathComponent }
-            let filePhrase = names.joined(separator: ", ")
-            return SourceSnapshot.normalizeSummary(
-                "Editing \(filePhrase) in \(ctx.projectName)"
-            )
-        }
-        if ctx.activityLine != "—" {
-            return SourceSnapshot.normalizeSummary(ctx.activityLine)
+
+        guard !sentences.isEmpty else { return nil }
+        return SourceSnapshot.normalizeBrief(sentences.joined(separator: " "))
+    }
+
+    static func extractOpeningGoal(from path: String) -> String? {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true).prefix(80) {
+            guard let data = String(raw).data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+
+            if let msg = obj["message"] as? [String: Any], msg["role"] as? String == "user" {
+                if let content = msg["content"] as? [[String: Any]] {
+                    for block in content where block["type"] as? String == "text" {
+                        if let t = block["text"] as? String,
+                           let goal = substantiveUserText(t) { return goal }
+                    }
+                } else if let s = msg["content"] as? String,
+                          let goal = substantiveUserText(s) { return goal }
+            }
+
+            if obj["type"] as? String == "event_msg",
+               let payload = obj["payload"] as? [String: Any],
+               payload["type"] as? String == "user_message",
+               let m = payload["message"] as? String,
+               let goal = substantiveUserText(m) { return goal }
         }
         return nil
     }
 
-    private static func pickedSummary(llm: String?, context: SummaryContext?) -> String? {
+    private static func substantiveUserText(_ text: String) -> String? {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.count >= 12, !shouldDiscardSnippet(cleaned) else { return nil }
+        let lower = cleaned.lowercased()
+        if lower == "yes" || lower == "continue" || lower == "go ahead" { return nil }
+        return cleaned
+    }
+
+    private static func pickedSummary(llm: String?,
+                                      context: SummaryContext?,
+                                      openingGoal: String?) -> String? {
         if let llm = llm?.trimmingCharacters(in: .whitespacesAndNewlines),
            !llm.isEmpty, !isLowQuality(llm) {
             return llm
         }
-        return structuralFallback(context: context)
+        return structuralFallback(context: context, openingGoal: openingGoal)
     }
 
     private static func contextHeader(_ ctx: SummaryContext) -> String {
@@ -509,7 +556,7 @@ final class Summarizer {
 
     /// Bump when the prompt or extraction logic changes — old cache entries
     /// then naturally turn into cache misses and get re-generated.
-    private static let cacheVersion = 5
+    private static let cacheVersion = 6
 
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037

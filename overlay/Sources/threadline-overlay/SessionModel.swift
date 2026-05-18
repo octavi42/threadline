@@ -130,9 +130,57 @@ struct SourceSnapshot: Identifiable, Equatable {
         return parts.joined(separator: " · ")
     }
 
-    /// One-line LLM summary: word-capped and length-limited for every surface.
+    /// One-line sidebar headline from a session brief.
+    static func briefHeadline(_ brief: String) -> String {
+        compactLine(brief, limit: 96, maxWords: 16, firstSentence: true)
+    }
+
+    /// Multi-sentence session brief for the Overview tab.
+    static func normalizeBrief(_ text: String) -> String {
+        var line = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Keep up to two sentences when the model returns a wall of text.
+        var sentences: [String] = []
+        var rest = line
+        while !rest.isEmpty, sentences.count < 2 {
+            if let range = rest.range(of: #"[.!?]\s+"#, options: .regularExpression) {
+                let end = range.upperBound
+                let chunk = String(rest[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !chunk.isEmpty { sentences.append(chunk) }
+                rest = String(rest[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                sentences.append(rest)
+                break
+            }
+        }
+        if !sentences.isEmpty {
+            line = sentences.joined(separator: " ")
+        }
+
+        let maxWords = 50
+        let words = line.split(separator: " ", omittingEmptySubsequences: true)
+        if words.count > maxWords {
+            line = words.prefix(maxWords).joined(separator: " ") + "..."
+        }
+
+        let limit = 320
+        guard line.count > limit else { return line }
+        let cutoff = line.index(line.startIndex, offsetBy: max(0, limit - 1))
+        let prefix = line[..<cutoff]
+        if let space = prefix.lastIndex(of: " "), space > line.startIndex {
+            return String(prefix[..<space]) + "..."
+        }
+        return String(prefix) + "..."
+    }
+
+    /// Deprecated alias — sidebar uses `briefHeadline` on stored briefs.
     static func normalizeSummary(_ text: String) -> String {
-        compactLine(text, limit: 96, maxWords: 12, firstSentence: false)
+        briefHeadline(text)
     }
 
     static func compactLine(_ text: String,
@@ -536,11 +584,11 @@ final class SessionModel: ObservableObject {
             mtime: mtime,
             context: ctx,
             onUpdate: { [weak self] text in
-                self?.summaries[id] = SourceSnapshot.normalizeSummary(text)
+                self?.summaries[id] = SourceSnapshot.normalizeBrief(text)
             }
         )
         if let cached = cached {
-            let normalized = SourceSnapshot.normalizeSummary(cached)
+            let normalized = SourceSnapshot.normalizeBrief(cached)
             if summaries[id] != normalized { summaries[id] = normalized }
         }
     }

@@ -16,10 +16,10 @@ final class SummarizerTests: XCTestCase {
             "The current state of the project involves several key components."
         ))
         XCTAssertTrue(Summarizer.isLowQuality(
-            "arrays to views like linesAdded, linesRemoved, and snap.tasksDone"
+            "I've made the following changes to ensure that the session text"
         ))
         XCTAssertFalse(Summarizer.isLowQuality(
-            "Adding Ollama local AI to Summarizer and WorkClassifier"
+            "Adding Ollama local AI to Summarizer and WorkClassifier. Touched Panel.swift."
         ))
     }
 
@@ -32,7 +32,9 @@ final class SummarizerTests: XCTestCase {
             activityLine: "—"
         )
         let text = Summarizer.structuralFallback(context: ctx)
-        XCTAssertEqual(text, "Implement local Ollama support")
+        XCTAssertTrue(text?.contains("Goal:") == true)
+        XCTAssertTrue(text?.contains("Ollama") == true)
+        XCTAssertTrue(text?.contains("Summarizer.swift") == true)
     }
 
     func testStructuralFallbackUsesFilesWhenNoTask() {
@@ -45,6 +47,13 @@ final class SummarizerTests: XCTestCase {
         )
         let text = Summarizer.structuralFallback(context: ctx)
         XCTAssertTrue(text?.contains("Panel.swift") == true)
-        XCTAssertTrue(text?.contains("threadline") == true)
+    }
+
+    func testNormalizeBriefAllowsMultipleSentences() {
+        let brief = SourceSnapshot.normalizeBrief(
+            "User asked to add local Ollama. Edited Summarizer.swift and tests pass."
+        )
+        XCTAssertTrue(brief.contains("Ollama"))
+        XCTAssertGreaterThan(brief.count, 40)
     }
 }
