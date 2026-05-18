@@ -2,9 +2,27 @@
 __pycache__/
 *.pyc
 
+# Environment / secrets (never commit)
+.env
+.env.*
+!.env.example
+
 # Swift overlay
 overlay/.build/
 overlay/.swiftpm/
 overlay/Package.resolved
 
+# Local AI / editor state
 .claude/
+.cursor/plans/
+.cursor/projects/
+
+# macOS / IDE
+*.swp
+*~
+.idea/
+.vscode/
+*.xcuserstate
+
+# Threadline runtime data (created on user machines)
+.threadline/

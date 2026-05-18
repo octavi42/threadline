@@ -11,3 +11,5 @@ threadline-overlay toggle  # global hotkey: Control+Option+Command+T
 ```
 
 Product design notes live in [`docs/`](docs/).
+
+Licensed under the [MIT License](LICENSE).
