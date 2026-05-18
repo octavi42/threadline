@@ -4,7 +4,6 @@ enum DetailTab: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case tasks    = "Tasks"
     case files    = "Files"
-    case summary  = "Summary"
     var id: String { rawValue }
 }
 
@@ -50,7 +49,7 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: model.selectedID) { _ in
-            if tab == .summary { model.requestSummaryForSelection() }
+            model.requestSummaryForSelection()
         }
     }
 }
@@ -238,7 +237,7 @@ private struct AgentRow: View {
     }
     private var secondaryLine: String? {
         if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return s
+            return SourceSnapshot.briefHeadline(s)
         }
         let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback == "—" ? nil : fallback
@@ -266,18 +265,15 @@ private struct DetailsPane: View {
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 20)
-                .onChange(of: tab) { newValue in
-                    if newValue == .summary { model.requestSummaryForSelection() }
-                }
                 Divider().padding(.top, 8)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         switch tab {
-                        case .overview: OverviewView(snap: snap,
+                        case .overview: OverviewView(model: model,
+                                                     snap: snap,
                                                      workState: model.workStates[snap.id] ?? snap.workState)
                         case .tasks:    TasksView(snap: snap)
                         case .files:    FilesView(model: model, snap: snap)
-                        case .summary:  SummaryView(model: model, snap: snap)
                         }
                     }
                     .padding(20)
@@ -693,24 +689,19 @@ private struct DetailHeader: View {
 // MARK: - tabs
 
 private struct OverviewView: View {
+    @ObservedObject var model: SessionModel
     let snap: SourceSnapshot
     let workState: WorkState
+
     var body: some View {
         let work = workState
         VStack(alignment: .leading, spacing: 18) {
             WorkSummaryView(snap: snap, work: work)
+            SessionBriefSection(model: model, snap: snap)
             statsGrid
-            if let task = snap.currentTask, !task.isEmpty {
-                section(label: "Current task", text: SourceSnapshot.compactLine(task))
-            }
-            if let last = snap.lastTool, !last.isEmpty {
-                section(label: "Last action", text: last, mono: true)
-            }
-            if snap.activityLine != "—" {
-                section(label: "Current activity", text: snap.activityLine)
-            }
             Spacer(minLength: 0)
         }
+        .onAppear { model.requestSummaryForSelection() }
     }
     private var statsGrid: some View {
         let branchStr: String? = {
@@ -767,6 +758,48 @@ private struct OverviewView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct SessionBriefSection: View {
+    @ObservedObject var model: SessionModel
+    let snap: SourceSnapshot
+
+    private var brief: String? {
+        model.summaries[snap.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("SESSION")
+            if let text = brief, !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 14))
+                    .lineSpacing(4)
+                    .foregroundColor(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Building session brief…")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                Text("Local Ollama, then Claude/Codex. Local AI: \(LocalLLM.statusLabel).")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color.secondary.opacity(0.8))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.primary.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 }
 
@@ -1264,42 +1297,6 @@ private struct FlowChips: View {
                     )
                     .foregroundColor(.primary)
             }
-        }
-    }
-}
-
-private struct SummaryView: View {
-    @ObservedObject var model: SessionModel
-    let snap: SourceSnapshot
-    var body: some View {
-        if let text = model.summaries[snap.id], !text.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("CURRENT")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .tracking(0.5)
-                    .foregroundColor(.secondary)
-                Text(text)
-                    .font(.system(size: 14))
-                    .lineSpacing(2)
-                    .foregroundColor(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Summarising this session…")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                Text("Uses your installed `claude -p` or `codex exec` — no separate API key needed. Falls back to ANTHROPIC_API_KEY if both CLIs are missing.")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color.secondary.opacity(0.8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onAppear { model.requestSummaryForSelection() }
         }
     }
 }

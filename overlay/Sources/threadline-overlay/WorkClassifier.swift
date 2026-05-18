@@ -72,10 +72,7 @@ final class WorkClassifier {
 
     private func fetchAndCache(snap: SourceSnapshot, path: String, mtime: Date) -> WorkState? {
         guard let evidence = buildEvidence(snap: snap, path: path) else { return nil }
-        let raw = runClaudeCLI(evidence: evidence)
-               ?? runCodexCLI(evidence: evidence)
-               ?? runAnthropicAPI(evidence: evidence)
-        guard let work = parseWorkState(raw) else { return nil }
+        guard let work = firstParsedWorkState(from: evidence) else { return nil }
         let entry = CacheEntry(mtime: mtime, work: work)
         lock.lock()
         memory[path] = entry
@@ -228,6 +225,22 @@ final class WorkClassifier {
         """
     }
 
+    /// Try each backend until one returns parseable classification JSON.
+    private func firstParsedWorkState(from evidence: String) -> WorkState? {
+        let runners: [() -> String?] = [
+            { self.runOllama(evidence: evidence) },
+            { self.runClaudeCLI(evidence: evidence) },
+            { self.runCodexCLI(evidence: evidence) },
+            { self.runAnthropicAPI(evidence: evidence) },
+        ]
+        for run in runners {
+            if let raw = run(), let work = parseWorkState(raw) {
+                return work
+            }
+        }
+        return nil
+    }
+
     private func parseWorkState(_ raw: String?) -> WorkState? {
         guard var text = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { return nil }
@@ -281,6 +294,19 @@ final class WorkClassifier {
         case .working: return "Watch"
         case .done: return "Ignore"
         }
+    }
+
+    private static let classifySystem = """
+        Classify the AI coding session from the user message. \
+        Return only one JSON object with keys status, reason, nextAction. \
+        status must be one of: Needs you, Tests failed, Stuck, Risky, Ready, Working, Done.
+        """
+
+    private func runOllama(evidence: String) -> String? {
+        LocalLLM.complete(system: Self.classifySystem,
+                          user: evidence,
+                          maxTokens: 120,
+                          timeout: 20)
     }
 
     private func runClaudeCLI(evidence: String) -> String? {
@@ -343,15 +369,10 @@ final class WorkClassifier {
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(key, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        let system = """
-        Classify the AI coding session from the user message. \
-        Return only one JSON object with keys status, reason, nextAction. \
-        status must be one of: Needs you, Tests failed, Stuck, Risky, Ready, Working, Done.
-        """
         let payload: [String: Any] = [
             "model": "claude-haiku-4-5",
             "max_tokens": 120,
-            "system": system,
+            "system": Self.classifySystem,
             "messages": [["role": "user", "content": evidence]],
         ]
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return nil }

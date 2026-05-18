@@ -113,6 +113,27 @@ threadline-overlay (single binary)
                     └── OverlayController (NSWindow + show/hide)
 ```
 
+## Optional local AI (Ollama)
+
+Session summaries and work-status labels try **Ollama first** when it is running
+on this Mac. No API key required. If Ollama is not installed or not running,
+Threadline falls back to your `claude -p` / `codex exec` CLIs, then rule-based
+status.
+
+```bash
+brew install ollama
+ollama pull qwen2.5:3b
+ollama serve   # or leave the Ollama app running
+```
+
+Configure via environment or `~/.threadline/config.json`:
+
+| Key | Default |
+|-----|---------|
+| `THREADLINE_OLLAMA_HOST` / `ollama_host` | `http://127.0.0.1:11434` |
+| `THREADLINE_OLLAMA_MODEL` / `ollama_model` | `qwen2.5:3b` |
+| `THREADLINE_DISABLE_OLLAMA=1` | skip local AI |
+
 ## Roadmap
 
 - Parse Cursor `cursorDiskKV` bubbles for real chat text.
