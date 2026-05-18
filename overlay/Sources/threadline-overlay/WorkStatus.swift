@@ -35,6 +35,33 @@ enum WorkStatusResolver {
         return parts.joined(separator: "\n").lowercased()
     }
 
+    private static let resolveCacheLock = NSLock()
+    private static var resolveCache: [String: (mtime: Date, work: WorkState)] = [:]
+
+    /// Stable trust label for a session — recomputes only when the JSONL mtime changes.
+    static func resolveStable(_ snap: SourceSnapshot) -> WorkState {
+        let mtime = snap.updatedAt ?? .distantPast
+        resolveCacheLock.lock()
+        if let hit = resolveCache[snap.id], hit.mtime == mtime {
+            let work = hit.work
+            resolveCacheLock.unlock()
+            return work
+        }
+        resolveCacheLock.unlock()
+
+        let work = resolve(snap)
+        resolveCacheLock.lock()
+        resolveCache[snap.id] = (mtime, work)
+        resolveCacheLock.unlock()
+        return work
+    }
+
+    static func pruneResolveCache(keeping ids: Set<String>) {
+        resolveCacheLock.lock()
+        resolveCache = resolveCache.filter { ids.contains($0.key) }
+        resolveCacheLock.unlock()
+    }
+
     static func resolve(_ snap: SourceSnapshot) -> WorkState {
         let text = evidenceText(for: snap)
         let codeChanged = hasCodeChanges(snap)
@@ -154,9 +181,10 @@ enum WorkStatusResolver {
     }
 
     static func isActivelyWorking(_ snap: SourceSnapshot, now: Date = Date()) -> Bool {
-        guard snap.state == .running || snap.livePid != nil else { return false }
-        guard let updatedAt = snap.updatedAt else { return snap.state == .running }
-        return now.timeIntervalSince(updatedAt) < 120
+        if snap.state == .running { return true }
+        guard snap.livePid != nil, let updatedAt = snap.updatedAt else { return false }
+        // Live CLI process but idle: only "working" if the log changed very recently.
+        return now.timeIntervalSince(updatedAt) < 30
     }
 
     // MARK: - evidence
@@ -419,7 +447,7 @@ extension SourceSnapshot {
         s.tasksDone = s.tasks.filter { $0.status == "completed" }.count
         s.tasksInProgress = s.tasks.filter { $0.status == "in_progress" }.count
         s.tasksPending = s.tasks.filter { $0.status == "pending" }.count
-        s.workState = WorkStatusResolver.resolve(s)
+        s.workState = WorkStatusResolver.resolveStable(s)
         s.fileChanges = s.fileChanges.map { group in
             var g = group
             g.linesAdded = g.edits.reduce(0) { $0 + $1.rawLinesAdded }

@@ -475,9 +475,9 @@ final class SessionModel: ObservableObject {
             currentPollInterval = pollInterval
             scheduleTimer(interval: pollInterval)
         }
+        WorkStatusResolver.pruneResolveCache(keeping: Set(all.map(\.id)))
         if let snap = selectedSnapshot {
             kickoffSummary(for: snap)
-            kickoffWorkClassification(for: snap)
         }
     }
 
@@ -556,7 +556,13 @@ final class SessionModel: ObservableObject {
         }
     }
 
+    /// Inbox trust labels — deterministic and stable until the session log changes.
     func workState(for snap: SourceSnapshot) -> WorkState {
+        snap.workState
+    }
+
+    /// Detail pane may use LLM classification when available.
+    func detailWorkState(for snap: SourceSnapshot) -> WorkState {
         workStates[snap.id] ?? snap.workState
     }
 

@@ -214,7 +214,7 @@ private struct FolderHeader: View {
     @ObservedObject var model: SessionModel
 
     private var trust: FolderTrustSummary {
-        folder.trustSummary(workStates: model.workStates)
+        folder.trustSummary(workStates: [:])
     }
 
     var body: some View {
@@ -313,7 +313,7 @@ private struct DetailsPane: View {
                         switch tab {
                         case .overview: OverviewView(model: model,
                                                      snap: snap,
-                                                     workState: model.workStates[snap.id] ?? snap.workState)
+                                                     workState: model.detailWorkState(for: snap))
                         case .tasks:    TasksView(snap: snap)
                         case .files:    FilesView(model: model, snap: snap)
                         }
@@ -390,7 +390,7 @@ private struct FolderConflictStripView: View {
     let folder: SessionFolder
 
     private var conflicts: [FileAgentConflict] {
-        folder.fileConflicts(workStates: model.workStates)
+        folder.fileConflicts(workStates: [:])
     }
 
     var body: some View {
@@ -475,7 +475,7 @@ private struct FolderTrustBoardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("TRUST BOARD")
-            if let rollup = folder.trustSummary(workStates: model.workStates).rollupLine {
+            if let rollup = folder.trustSummary(workStates: [:]).rollupLine {
                 Text(rollup)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.primary)

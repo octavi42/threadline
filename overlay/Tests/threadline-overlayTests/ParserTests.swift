@@ -315,6 +315,21 @@ final class WorkStatusResolverTests: XCTestCase {
     }
 }
 
+final class WorkStatusStabilityTests: XCTestCase {
+    func testResolveStableDoesNotChangeWithoutLogUpdate() {
+        var snap = SourceSnapshot(id: "stable", tool: "Codex", badge: "CDX")
+        snap.state = .idle
+        snap.updatedAt = Date()
+        snap.livePid = 42
+        snap.filesEdited = ["/tmp/a.swift"]
+
+        let first = WorkStatusResolver.resolveStable(snap)
+        let second = WorkStatusResolver.resolveStable(snap)
+
+        XCTAssertEqual(first, second)
+    }
+}
+
 final class StuckLoopDetectorTests: XCTestCase {
     func testDetectsRepeatedErrorsInPlainText() {
         let text = """
