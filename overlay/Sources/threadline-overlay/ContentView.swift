@@ -153,10 +153,12 @@ private struct AgentsList: View {
                             FolderSidebarRow(folder: folder, model: model)
                                 .tag(folder.selectionID)
                             if model.isFolderExpanded(folder.id) {
-                                ForEach(folder.snapshots) { snap in
+                                ForEach(Array(folder.snapshots.enumerated()), id: \.element.id) { index, snap in
                                     AgentRow(snap: snap,
                                              summary: model.summaries[snap.id],
                                              workState: model.workState(for: snap))
+                                        .padding(.leading, 12)
+                                        .padding(.top, index == 0 ? 6 : 2)
                                         .tag(snap.id)
                                 }
                             }
@@ -196,7 +198,15 @@ private struct FolderSidebarRow: View {
                 }
         }
         .padding(.leading, 4)
-        .padding(.vertical, 2)
+        .padding(.top, 2)
+        .padding(.bottom, isExpanded ? 8 : 2)
+        .overlay(alignment: .bottom) {
+            if isExpanded {
+                Divider()
+                    .opacity(0.45)
+                    .padding(.leading, 18)
+            }
+        }
     }
 }
 
@@ -211,9 +221,6 @@ private struct FolderHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(workStatusColor(folderWorstStatus))
-                    .frame(width: 6, height: 6)
                 Text(folder.name)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .lineLimit(1)
@@ -253,10 +260,6 @@ private struct AgentRow: View {
     var body: some View {
         let work = workState ?? snap.workState
         HStack(alignment: .top, spacing: 6) {
-            Circle()
-                .fill(workStatusColor(work.status))
-                .frame(width: 7, height: 7)
-                .padding(.top, 4)
             BadgeView(label: snap.badge, color: badgeColor(snap.tool)).padding(.top, 2)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -460,9 +463,6 @@ private struct FileConflictCard: View {
                         !WorkStatusResolver.isInactiveInbox($0.work)
                     }, id: \.snapshotID) { contributor in
                         HStack(spacing: 6) {
-                            Circle()
-                                .fill(workStatusColor(contributor.work.status))
-                                .frame(width: 6, height: 6)
                             Text(contributor.summaryLine)
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(.primary)
