@@ -220,7 +220,7 @@ private struct AgentRow: View {
     }
     private var secondaryLine: String? {
         if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return SourceSnapshot.compactLine(s)
+            return s
         }
         let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback == "—" ? nil : fallback
@@ -534,7 +534,7 @@ private struct OverviewView: View {
             WorkSummaryView(snap: snap, work: work)
             statsGrid
             if let task = snap.currentTask, !task.isEmpty {
-                section(label: "Current task", text: task)
+                section(label: "Current task", text: SourceSnapshot.compactLine(task))
             }
             if let last = snap.lastTool, !last.isEmpty {
                 section(label: "Last action", text: last, mono: true)

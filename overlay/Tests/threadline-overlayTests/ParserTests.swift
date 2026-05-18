@@ -219,6 +219,25 @@ final class WorkStatusResolverTests: XCTestCase {
                        "Threadline is rebuilding the session inbox...")
     }
 
+    func testNormalizeSummaryCapsWordCount() {
+        let text = """
+        Threadline is rebuilding the session inbox around concise current activity summaries
+        for active agents so nobody reads long transcript style messages anymore
+        """
+
+        let normalized = SourceSnapshot.normalizeSummary(text)
+        let words = normalized.split(separator: " ", omittingEmptySubsequences: true)
+
+        XCTAssertLessThanOrEqual(words.count, 13) // 12 words + optional "..."
+        XCTAssertTrue(normalized.hasSuffix("..."))
+    }
+
+    func testNormalizeSummaryIsIdempotent() {
+        let raw = "Fixing overlay summary compaction and normalizing cached session text"
+        let once = SourceSnapshot.normalizeSummary(raw)
+        XCTAssertEqual(SourceSnapshot.normalizeSummary(once), once)
+    }
+
     private func baseSnapshot(state: SourceState, id: String = "snap") -> SourceSnapshot {
         var snap = SourceSnapshot(id: id, tool: "Codex", badge: "CDX")
         snap.cwd = "/tmp/project"
