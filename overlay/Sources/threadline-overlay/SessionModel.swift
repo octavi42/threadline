@@ -517,12 +517,24 @@ final class SessionModel: ObservableObject {
         return (cwd as NSString).standardizingPath
     }
 
+    private func summaryContext(for snap: SourceSnapshot) -> SummaryContext {
+        SummaryContext(
+            projectName: snap.projectName,
+            currentTask: snap.currentTask,
+            lastTool: snap.lastTool,
+            filesEdited: snap.filesEdited,
+            activityLine: snap.activityLine
+        )
+    }
+
     private func kickoffSummary(for snap: SourceSnapshot) {
         guard let path = snap.jsonlPath, let mtime = snap.updatedAt else { return }
         let id = snap.id
+        let ctx = summaryContext(for: snap)
         let cached = Summarizer.shared.summary(
             forJSONL: path,
             mtime: mtime,
+            context: ctx,
             onUpdate: { [weak self] text in
                 self?.summaries[id] = SourceSnapshot.normalizeSummary(text)
             }

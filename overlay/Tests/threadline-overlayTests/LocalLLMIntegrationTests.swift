@@ -64,9 +64,16 @@ final class LocalLLMIntegrationTests: XCTestCase {
         let mtime = Date()
         try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: tmp)
 
+        let ctx = SummaryContext(
+            projectName: "proj",
+            currentTask: "Read auth module",
+            lastTool: "Read auth.swift",
+            filesEdited: ["/Users/test/proj/auth.swift"],
+            activityLine: "Read auth module"
+        )
         let exp = expectation(description: "summarizer")
         var summary: String?
-        _ = Summarizer.shared.summary(forJSONL: tmp, mtime: mtime) { text in
+        _ = Summarizer.shared.summary(forJSONL: tmp, mtime: mtime, context: ctx) { text in
             summary = text
             exp.fulfill()
         }

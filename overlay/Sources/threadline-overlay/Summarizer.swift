@@ -17,6 +17,14 @@ import Foundation
 ///
 /// Cached on disk by (jsonlPath, mtime) so each session only summarises once
 /// per significant change.
+struct SummaryContext: Equatable {
+    let projectName: String
+    let currentTask: String?
+    let lastTool: String?
+    let filesEdited: [String]
+    let activityLine: String
+}
+
 final class Summarizer {
     static let shared = Summarizer()
 
@@ -52,9 +60,10 @@ final class Summarizer {
     private let processSemaphore = DispatchSemaphore(value: 2)
 
     private static let summaryPrompt =
-        "Return one short present-tense line describing what the AI is doing now. " +
-        "Maximum 12 words. Prefer concrete work over history. " +
-        "No preamble, no bullets, no punctuation-heavy prose."
+        "Write one present-tense line (max 12 words) describing the developer's " +
+        "current coding task. Name concrete files, features, or commands when known. " +
+        "Do not describe summarization, Threadline, or internal variable names. " +
+        "No preamble, no meta commentary, no bullets."
 
     private var cacheDir: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -68,6 +77,7 @@ final class Summarizer {
     /// nil). `onUpdate` fires on main when a fresh summary lands.
     func summary(forJSONL path: String,
                  mtime: Date,
+                 context: SummaryContext? = nil,
                  onUpdate: @escaping (String) -> Void) -> String? {
         lock.lock()
         if let hit = memory[path], hit.mtime == mtime {
@@ -92,7 +102,7 @@ final class Summarizer {
             guard let self = self else { return }
             self.processSemaphore.wait()
             defer { self.processSemaphore.signal() }
-            let text = self.fetchAndCache(path: path, mtime: mtime)
+            let text = self.fetchAndCache(path: path, mtime: mtime, context: context)
             self.lock.lock()
             self.inflight.remove(path)
             self.lock.unlock()
@@ -105,19 +115,24 @@ final class Summarizer {
 
     // MARK: - dispatch
 
-    private func fetchAndCache(path: String, mtime: Date) -> String? {
-        guard let content = buildPrompt(from: path) else { return nil }
+    private func fetchAndCache(path: String, mtime: Date, context: SummaryContext?) -> String? {
+        guard let content = buildPrompt(from: path, context: context) else {
+            return Self.structuralFallback(context: context)
+        }
 
         // Pull the prior summary (any mtime) so the prompt can evolve it
         // instead of starting fresh from the sliding window.
         lock.lock()
         let previous = memory[path]?.text ?? loadDisk(path: path)?.text
         lock.unlock()
+        let safePrevious = previous.flatMap { Self.isLowQuality($0) ? nil : $0 }
 
-        let summary = runOllama(content: content, previous: previous)
-                   ?? runClaudeCLI(content: content, previous: previous)
-                   ?? runCodexCLI(content: content, previous: previous)
-                   ?? runAnthropicAPI(content: content, previous: previous)
+        let raw = runOllama(content: content, previous: safePrevious)
+               ?? runClaudeCLI(content: content, previous: safePrevious)
+               ?? runCodexCLI(content: content, previous: safePrevious)
+               ?? runAnthropicAPI(content: content, previous: safePrevious)
+
+        let summary = Self.pickedSummary(llm: raw, context: context)
         guard let text = summary, !text.isEmpty else { return nil }
         let normalized = SourceSnapshot.normalizeSummary(text)
         let entry = CacheEntry(mtime: mtime, text: normalized)
@@ -287,7 +302,7 @@ final class Summarizer {
     /// turn (tool-use noise stripped). If the total exceeds the prompt
     /// budget, keep the head and the tail with an ellipsis between so the
     /// LLM sees both how the session opened and the recent activity.
-    private func buildPrompt(from path: String) -> String? {
+    private func buildPrompt(from path: String, context: SummaryContext?) -> String? {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
             return nil
         }
@@ -301,13 +316,23 @@ final class Summarizer {
                 let role = msg["role"] as? String ?? ""
                 if let content = msg["content"] as? [[String: Any]] {
                     for block in content {
-                        if block["type"] as? String == "text",
-                           let t = block["text"] as? String,
-                           !t.isEmpty, !t.hasPrefix("<") {
-                            snippets.append("\(role): \(t)")
+                        switch block["type"] as? String {
+                        case "text":
+                            if let t = block["text"] as? String,
+                               !t.isEmpty, !t.hasPrefix("<"),
+                               !Self.shouldDiscardSnippet(t) {
+                                snippets.append("\(role): \(t)")
+                            }
+                        case "tool_use":
+                            if let line = Self.toolUseLine(block) {
+                                snippets.append("tool: \(line)")
+                            }
+                        default:
+                            break
                         }
                     }
-                } else if let s = msg["content"] as? String, !s.isEmpty {
+                } else if let s = msg["content"] as? String,
+                          !s.isEmpty, !Self.shouldDiscardSnippet(s) {
                     snippets.append("\(role): \(s)")
                 }
                 continue
@@ -317,30 +342,146 @@ final class Summarizer {
                let payload = obj["payload"] as? [String: Any] {
                 let et = payload["type"] as? String
                 if (et == "agent_message" || et == "user_message"),
-                   let m = payload["message"] as? String, !m.isEmpty {
+                   let m = payload["message"] as? String,
+                   !m.isEmpty, !Self.shouldDiscardSnippet(m) {
                     let role = et == "user_message" ? "user" : "assistant"
                     snippets.append("\(role): \(m)")
                 }
             }
         }
-        if snippets.isEmpty { return nil }
+        if snippets.isEmpty, context == nil { return nil }
+
+        var parts: [String] = []
+        if let ctx = context {
+            parts.append(Self.contextHeader(ctx))
+        }
+        if !snippets.isEmpty {
+            parts.append(snippets.joined(separator: "\n\n"))
+        }
+        let joined = parts.joined(separator: "\n\n---\n\n")
+        if joined.isEmpty { return nil }
 
         // Cap per-snippet length so a single huge turn can't blow the budget.
-        let trimmed = snippets.map { String($0.prefix(2000)) }
-        let joined = trimmed.joined(separator: "\n\n")
+        let trimmed = joined.split(separator: "\n\n", omittingEmptySubsequences: true)
+            .map { String($0.prefix(2000)) }
+        let body = trimmed.joined(separator: "\n\n")
 
         // Total budget: ~100 KB of text (~25K tokens — well within haiku's
         // 200K context window with room for the system prompt + response).
         let maxBytes = 100 * 1024
-        if joined.utf8.count <= maxBytes { return joined }
+        if body.utf8.count <= maxBytes { return body }
 
         // Too long: keep first 20% + last 80%, with an ellipsis between, so
         // the LLM sees the framing and the recent arc.
         let headBytes = maxBytes / 5
         let tailBytes = maxBytes - headBytes - 32
-        let head = String(joined.prefix(headBytes))
-        let tail = String(joined.suffix(tailBytes))
+        let head = String(body.prefix(headBytes))
+        let tail = String(body.suffix(tailBytes))
         return head + "\n\n[…earlier turns omitted…]\n\n" + tail
+    }
+
+    // MARK: - quality helpers (testable)
+
+    static func shouldDiscardSnippet(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let noise = [
+            "summarize this coding-assistant session",
+            "summarize this claude code session transcript",
+            "summarise this session",
+            "return one short present-tense line",
+            "maximum 12 words",
+            "classify the session from stdin",
+            "uses your installed `claude -p`",
+            "threadline xray",
+        ]
+        if noise.contains(where: { lower.contains($0) }) { return true }
+        if lower.hasPrefix("i've made the current session") { return true }
+        if lower.hasPrefix("the current state of the project") { return true }
+        if lower.hasPrefix("the project's current focus is on") { return true }
+        return false
+    }
+
+    static func isLowQuality(_ summary: String) -> Bool {
+        let lower = summary.lowercased()
+        let fluff = [
+            "the current state of the project",
+            "the project's current focus",
+            "involves several key components",
+            "these elements are crucial",
+            "ensuring a seamless integration",
+            "i've made the current session text",
+            "more concise by limiting",
+            "arrays to views like",
+            "snap.tasksdone",
+            "linesadded",
+            "linesremoved",
+            "ai coding agents, keeping track",
+        ]
+        if fluff.contains(where: { lower.contains($0) }) { return true }
+        if lower.hasPrefix("the ") && lower.contains(" involves ") { return true }
+        return false
+    }
+
+    static func structuralFallback(context: SummaryContext?) -> String? {
+        guard let ctx = context else { return nil }
+        if let task = ctx.currentTask?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !task.isEmpty {
+            return SourceSnapshot.normalizeSummary(task)
+        }
+        if let tool = ctx.lastTool?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !tool.isEmpty {
+            return SourceSnapshot.normalizeSummary(tool)
+        }
+        if !ctx.filesEdited.isEmpty {
+            let names = ctx.filesEdited.suffix(2).map { ($0 as NSString).lastPathComponent }
+            let filePhrase = names.joined(separator: ", ")
+            return SourceSnapshot.normalizeSummary(
+                "Editing \(filePhrase) in \(ctx.projectName)"
+            )
+        }
+        if ctx.activityLine != "—" {
+            return SourceSnapshot.normalizeSummary(ctx.activityLine)
+        }
+        return nil
+    }
+
+    private static func pickedSummary(llm: String?, context: SummaryContext?) -> String? {
+        if let llm = llm?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !llm.isEmpty, !isLowQuality(llm) {
+            return llm
+        }
+        return structuralFallback(context: context)
+    }
+
+    private static func contextHeader(_ ctx: SummaryContext) -> String {
+        var lines = ["project: \(ctx.projectName)"]
+        if !ctx.filesEdited.isEmpty {
+            let names = ctx.filesEdited.suffix(4).map { ($0 as NSString).lastPathComponent }
+            lines.append("files_edited: \(names.joined(separator: ", "))")
+        }
+        if let task = ctx.currentTask, !task.isEmpty {
+            lines.append("current_task: \(task)")
+        }
+        if let tool = ctx.lastTool, !tool.isEmpty {
+            lines.append("last_action: \(tool)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func toolUseLine(_ block: [String: Any]) -> String? {
+        guard let name = block["name"] as? String else { return nil }
+        let input = block["input"] as? [String: Any] ?? [:]
+        if let path = input["file_path"] as? String {
+            return "\(name) \((path as NSString).lastPathComponent)"
+        }
+        if let cmd = input["command"] as? String {
+            let first = cmd.split(separator: "\n").first.map(String.init) ?? cmd
+            return "\(name) \(first)"
+        }
+        if let subject = input["subject"] as? String {
+            return "\(name) \(subject)"
+        }
+        return name
     }
 
     // MARK: - disk cache
@@ -368,7 +509,7 @@ final class Summarizer {
 
     /// Bump when the prompt or extraction logic changes — old cache entries
     /// then naturally turn into cache misses and get re-generated.
-    private static let cacheVersion = 4
+    private static let cacheVersion = 5
 
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037
