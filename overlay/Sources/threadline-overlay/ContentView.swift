@@ -357,7 +357,6 @@ private struct FolderStatsView: View {
             ("awaiting", stats.awaiting > 0 ? "\(stats.awaiting)" : nil),
             ("tools", stats.toolsSummary.isEmpty ? nil : stats.toolsSummary),
             ("tasks", stats.taskCount == 0 ? nil : "\(stats.tasksDone)/\(stats.taskCount) done"),
-            ("files edited", stats.uniqueFileCount == 0 ? nil : "\(stats.uniqueFileCount)"),
         ]
 
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3),
@@ -457,58 +456,206 @@ private struct FolderTasksView: View {
 private struct FolderFilesView: View {
     @ObservedObject var model: SessionModel
     let folder: SessionFolder
+    @State private var showAllFiles = false
 
-    private var mergedChanges: [FileChangeGroup] {
-        var byPath: [String: [FileEditOp]] = [:]
-        for snap in folder.snapshots {
-            for group in snap.fileChanges {
-                byPath[group.path, default: []].append(contentsOf: group.edits)
-            }
-        }
-        return byPath.map { path, ops in
-            FileChangeGroup(path: path, edits: ops)
-        }.sorted { $0.path < $1.path }
-    }
+    private static let defaultVisibleFiles = 12
 
-    private var fallbackFiles: [String] {
-        var seen: Set<String> = []
-        var out: [String] = []
-        for path in folder.snapshots.flatMap(\.filesEdited) where !seen.contains(path) {
-            seen.insert(path)
-            out.append(path)
-        }
-        return out
+    private var files: [FolderMergedFile] { folder.mergedFiles() }
+    private var summary: FolderFilesSummary { folder.filesSummary() }
+
+    private var visibleFiles: [FolderMergedFile] {
+        if showAllFiles { return files }
+        return Array(files.prefix(Self.defaultVisibleFiles))
     }
 
     var body: some View {
-        let changes = mergedChanges
-        let fileCount = changes.isEmpty ? fallbackFiles.count : changes.count
-        if fileCount > 0 {
-            VStack(alignment: .leading, spacing: 6) {
-                sectionTitle("FILES EDITED (\(fileCount))")
-                if !changes.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(changes) { group in
-                            FileChangeRow(group: group,
-                                          isExpanded: model.expandedFiles.contains(group.path),
-                                          toggle: {
-                                if model.expandedFiles.contains(group.path) {
-                                    model.expandedFiles.remove(group.path)
-                                } else {
-                                    model.expandedFiles.insert(group.path)
-                                }
-                            })
-                        }
+        if summary.fileCount > 0 {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionTitle("FILES")
+                FolderFilesSummaryBar(summary: summary)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(visibleFiles) { file in
+                        FolderProjectFileRow(file: file, folder: folder, model: model)
                     }
-                } else {
-                    ForEach(fallbackFiles.prefix(12), id: \.self) { path in
-                        Text((path as NSString).abbreviatingWithTildeInPath)
-                            .font(.system(size: 12, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
+                    if files.count > Self.defaultVisibleFiles {
+                        Button(showAllFiles ? "Show fewer files" : "Show \(files.count - Self.defaultVisibleFiles) more files") {
+                            showAllFiles.toggle()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
                     }
                 }
+            }
+        }
+    }
+}
+
+private struct FolderFilesSummaryBar: View {
+    let summary: FolderFilesSummary
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(summary.fileCount) changed")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+            if summary.linesAdded > 0 || summary.linesRemoved > 0 {
+                HStack(spacing: 6) {
+                    if summary.linesAdded > 0 {
+                        Text("+\(summary.linesAdded)")
+                            .foregroundColor(Color(red: 0.30, green: 0.80, blue: 0.50))
+                    }
+                    if summary.linesRemoved > 0 {
+                        Text("−\(summary.linesRemoved)")
+                            .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.45))
+                    }
+                }
+                .font(.system(size: 11, design: .monospaced))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+}
+
+private struct FolderProjectFileRow: View {
+    let file: FolderMergedFile
+    let folder: SessionFolder
+    @ObservedObject var model: SessionModel
+
+    private var isExpanded: Bool { model.expandedFiles.contains(file.path) }
+
+    private static let maxVisibleEdits = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                toggleExpanded()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 10)
+                    Text((file.path as NSString).lastPathComponent)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 6) {
+                        if file.linesAdded > 0 {
+                            Text("+\(file.linesAdded)")
+                                .foregroundColor(Color(red: 0.30, green: 0.80, blue: 0.50))
+                        }
+                        if file.linesRemoved > 0 {
+                            Text("−\(file.linesRemoved)")
+                                .foregroundColor(Color(red: 0.95, green: 0.45, blue: 0.45))
+                        }
+                        if file.editCount > 0 {
+                            Text("\(file.editCount) edit\(file.editCount == 1 ? "" : "s")")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("path only")
+                                .foregroundColor(.secondary)
+                        }
+                        if !file.toolsLabel.isEmpty {
+                            Text(file.toolsLabel)
+                                .foregroundColor(Color.secondary.opacity(0.9))
+                                .lineLimit(1)
+                        }
+                    }
+                    .font(.system(size: 10, design: .monospaced))
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                FolderProjectFileExpanded(file: file, folder: folder, model: model,
+                                          maxEdits: Self.maxVisibleEdits)
+                    .padding(.leading, 20)
+                    .padding(.bottom, 10)
+            }
+
+            Divider().opacity(0.5)
+        }
+    }
+
+    private func toggleExpanded() {
+        if isExpanded {
+            model.expandedFiles.remove(file.path)
+        } else {
+            model.expandedFiles.insert(file.path)
+        }
+    }
+}
+
+private struct FolderProjectFileExpanded: View {
+    let file: FolderMergedFile
+    let folder: SessionFolder
+    @ObservedObject var model: SessionModel
+    let maxEdits: Int
+
+    private var visibleEdits: [FileEditOp] {
+        Array(file.edits.prefix(maxEdits))
+    }
+
+    private var hiddenEditCount: Int {
+        max(0, file.edits.count - visibleEdits.count)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text((file.path as NSString).abbreviatingWithTildeInPath)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+
+            if !file.tools.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Agents")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    ForEach(file.tools, id: \.self) { tool in
+                        Button(tool) {
+                            if let id = folder.snapshotID(tool: tool, path: file.path) {
+                                model.selectedID = id
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(badgeColor(tool).opacity(0.12))
+                        )
+                        .foregroundColor(badgeColor(tool))
+                    }
+                }
+            }
+
+            if file.hasDiffContent {
+                ForEach(visibleEdits) { op in
+                    EditOpView(op: op)
+                }
+                if hiddenEditCount > 0 {
+                    Text("\(hiddenEditCount) more edit\(hiddenEditCount == 1 ? "" : "s") across agents")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Text("Path recorded — open a session for full diff.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             }
         }
     }

@@ -249,6 +249,100 @@ struct SessionFolder: Identifiable, Equatable {
     var latestSnapshot: SourceSnapshot? {
         snapshots.first
     }
+
+    func filesSummary() -> FolderFilesSummary {
+        let files = mergedFiles()
+        return FolderFilesSummary(
+            fileCount: files.count,
+            linesAdded: files.reduce(0) { $0 + $1.linesAdded },
+            linesRemoved: files.reduce(0) { $0 + $1.linesRemoved }
+        )
+    }
+
+    /// Paths touched by any session in this project, merged and ranked by churn.
+    func mergedFiles() -> [FolderMergedFile] {
+        struct Acc {
+            var edits: [FileEditOp] = []
+            var linesAdded = 0
+            var linesRemoved = 0
+            var tools: Set<String> = []
+            var snapshotIDs: Set<String> = []
+        }
+
+        var byPath: [String: Acc] = [:]
+
+        for snap in snapshots {
+            for group in snap.fileChanges {
+                let path = group.path
+                var acc = byPath[path] ?? Acc()
+                acc.edits.append(contentsOf: group.edits)
+                acc.linesAdded += group.linesAdded
+                acc.linesRemoved += group.linesRemoved
+                acc.tools.insert(snap.tool)
+                acc.snapshotIDs.insert(snap.id)
+                byPath[path] = acc
+            }
+            for path in snap.filesEdited where byPath[path] == nil {
+                var acc = byPath[path] ?? Acc()
+                acc.tools.insert(snap.tool)
+                acc.snapshotIDs.insert(snap.id)
+                byPath[path] = acc
+            }
+        }
+
+        return byPath.map { path, acc in
+            FolderMergedFile(
+                path: path,
+                linesAdded: acc.linesAdded,
+                linesRemoved: acc.linesRemoved,
+                editCount: acc.edits.count,
+                tools: acc.tools.sorted(),
+                edits: acc.edits.sorted { $0.seq < $1.seq },
+                sourceSnapshotIDs: acc.snapshotIDs.sorted()
+            )
+        }
+        .sorted { a, b in
+            if a.churn != b.churn { return a.churn > b.churn }
+            if a.editCount != b.editCount { return a.editCount > b.editCount }
+            return a.path < b.path
+        }
+    }
+
+    /// First session that touched `path` for the given tool (for agent chips in file expand).
+    func snapshotID(tool: String, path: String) -> String? {
+        snapshots.first { snap in
+            snap.tool == tool &&
+            (snap.fileChanges.contains { $0.path == path } || snap.filesEdited.contains(path))
+        }?.id
+    }
+}
+
+struct FolderFilesSummary: Equatable {
+    let fileCount: Int
+    let linesAdded: Int
+    let linesRemoved: Int
+}
+
+/// One file row in the project-level files digest.
+struct FolderMergedFile: Identifiable, Equatable {
+    var id: String { path }
+    let path: String
+    let linesAdded: Int
+    let linesRemoved: Int
+    let editCount: Int
+    let tools: [String]
+    let edits: [FileEditOp]
+    let sourceSnapshotIDs: [String]
+
+    var churn: Int { linesAdded + linesRemoved }
+
+    var toolsLabel: String {
+        guard !tools.isEmpty else { return "" }
+        if tools.count <= 2 { return tools.joined(separator: ", ") }
+        return "\(tools[0]), \(tools[1]) +\(tools.count - 2)"
+    }
+
+    var hasDiffContent: Bool { !edits.isEmpty }
 }
 
 final class SessionModel: ObservableObject {
