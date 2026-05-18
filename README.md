@@ -48,13 +48,40 @@ No Accessibility, Input Monitoring, or Screen Recording prompts for normal use. 
 
 ## Install
 
-### One-liner (clone + build)
+### One-liner (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
 ```
 
-This clones the repo, builds a release binary, installs `threadline-overlay` to `~/.local/bin`, registers a LaunchAgent, and starts the daemon. Add `~/.local/bin` to your `PATH` if the installer prints a hint.
+The installer downloads a **prebuilt binary** from the [latest GitHub Release](https://github.com/octavi42/threadline/releases/latest) when one exists for your Mac (Apple Silicon or Intel). If there is no matching release, it clones the repo and builds with Swift.
+
+Installs `threadline-overlay` to `~/.local/bin`, registers a LaunchAgent, and starts the daemon. Add `~/.local/bin` to your `PATH` if the installer prints a hint.
+
+Pin a version:
+
+```bash
+THREADLINE_VERSION=v0.1.0 \
+  curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
+```
+
+Force a source build (requires Xcode / Swift 5.9+):
+
+```bash
+THREADLINE_BUILD_FROM_SOURCE=1 \
+  curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
+```
+
+### Manual download
+
+1. Open [Releases](https://github.com/octavi42/threadline/releases)
+2. Download `threadline-overlay-macos-arm64.tar.gz` (Apple Silicon) or `threadline-overlay-macos-x86_64.tar.gz` (Intel)
+3. Extract and run:
+
+```bash
+tar -xzf threadline-overlay-macos-arm64.tar.gz
+./threadline-overlay install
+```
 
 ### From a git clone
 
@@ -68,6 +95,7 @@ Fork or branch installs can override the source:
 ```bash
 THREADLINE_INSTALL_REPO=https://github.com/you/threadline.git \
 THREADLINE_INSTALL_REF=main \
+THREADLINE_GITHUB_REPO=you/threadline \
   curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
 ```
 
@@ -123,7 +151,7 @@ swift build
 swift test
 ```
 
-`CONTRIBUTING.md` and CI are coming as the project opens up. Open an [issue](https://github.com/octavi42/threadline/issues) for bugs and ideas.
+CI runs on every push to `main` (`swift build` + `swift test` in `overlay/`). Open an [issue](https://github.com/octavi42/threadline/issues) for bugs and ideas.
 
 ## License
 

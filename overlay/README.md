@@ -18,9 +18,9 @@ sessions: Claude Code, Codex CLI, and Cursor.
 
 ## Install
 
-Requires macOS 13+, Xcode 14+ / Swift 5.9+.
+Requires macOS 13+. Xcode 14+ / Swift 5.9+ only needed when building from source.
 
-**One-liner** (from the repo root on GitHub):
+**One-liner** (prebuilt release when available, otherwise builds from source):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/install.sh | bash
@@ -32,9 +32,11 @@ curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/in
 cd overlay && ./install.sh
 ```
 
-That builds a release binary, copies it to `~/.local/bin/threadline-overlay`,
-registers a LaunchAgent so the daemon survives logout/login, and starts it.
-Add `~/.local/bin` to your `PATH` if it isn't there yet.
+The installer prefers a [GitHub Release](https://github.com/octavi42/threadline/releases)
+prebuilt for your Mac; otherwise it builds from source (Xcode 14+ / Swift 5.9+).
+It copies `threadline-overlay` to `~/.local/bin`, registers a LaunchAgent so the
+daemon survives logout/login, and starts it. Add `~/.local/bin` to your `PATH` if
+it isn't there yet.
 
 No macOS permission prompts. No Accessibility, no Input Monitoring, no Screen
 Recording.
