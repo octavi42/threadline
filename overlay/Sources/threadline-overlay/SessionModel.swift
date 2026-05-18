@@ -400,7 +400,7 @@ final class SessionModel: ObservableObject {
     }
 
     @discardableResult
-    func selectSnapshot(scope: ShellRegistry.Scope) -> Bool {
+    func selectSnapshot(scope: ShellRegistry.Scope, allowFolderFallback: Bool = true) -> Bool {
         let target = normalizedCwd(scope.cwd)
         let normalizedTTY = TerminalIdentityResolver.normalizeTTY(scope.tty)
         let snap = snapshots.first { snap in
@@ -418,7 +418,29 @@ final class SessionModel: ObservableObject {
         }
 
         guard let snap = snap else {
-            return selectFolder(cwd: scope.cwd)
+            return allowFolderFallback ? selectFolder(cwd: scope.cwd) : false
+        }
+        selectedID = snap.id
+        return true
+    }
+
+    @discardableResult
+    func selectSnapshot(terminal: TerminalIdentity) -> Bool {
+        if let scope = ShellRegistry.shared.scope(terminal: terminal) {
+            return selectSnapshot(scope: scope, allowFolderFallback: false)
+        }
+        let normalizedTTY = TerminalIdentityResolver.normalizeTTY(terminal.tty)
+        let snap = snapshots.first { snap in
+            terminal.surfaceID != nil &&
+            snap.terminalPID == terminal.appPID &&
+            snap.terminalSurfaceID == terminal.surfaceID
+        } ?? snapshots.first { snap in
+            normalizedTTY != nil &&
+            TerminalIdentityResolver.normalizeTTY(snap.tty) == normalizedTTY
+        }
+
+        guard let snap = snap else {
+            return false
         }
         selectedID = snap.id
         return true

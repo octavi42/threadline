@@ -34,18 +34,15 @@ final class ShellRegistry {
     func touch(pid: pid_t, cwd: String, tty: String? = nil) {
         let normalizedTTY = TerminalIdentityResolver.normalizeTTY(tty)
         let touchedAt = Date()
+        let terminal = TerminalIdentityResolver.resolve(shellPid: pid, cwd: cwd, tty: normalizedTTY)
         lock.lock(); defer { lock.unlock() }
         entries[pid] = Entry(pid: pid,
                              cwd: cwd,
                              tty: normalizedTTY,
-                             terminal: nil,
+                             terminal: terminal,
                              touchedAt: touchedAt)
         prune()
         savePersisted()
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let terminal = TerminalIdentityResolver.resolve(shellPid: pid, cwd: cwd, tty: normalizedTTY)
-            self?.updateTerminal(pid: pid, touchedAt: touchedAt, terminal: terminal)
-        }
     }
 
     struct Scope {
@@ -68,6 +65,27 @@ final class ShellRegistry {
                              tty: entry.tty,
                              terminal: entry.terminal)
             }
+        }
+        return nil
+    }
+
+    func scope(terminal: TerminalIdentity) -> Scope? {
+        lock.lock(); defer { lock.unlock() }
+        prune()
+        let sorted = entries.values.sorted { $0.touchedAt > $1.touchedAt }
+        if let surfaceID = terminal.surfaceID,
+           let match = sorted.first(where: { $0.terminal?.surfaceID == surfaceID }) {
+            return Scope(shellPid: match.pid,
+                         cwd: match.cwd,
+                         tty: match.tty,
+                         terminal: match.terminal)
+        }
+        if let tty = TerminalIdentityResolver.normalizeTTY(terminal.tty),
+           let match = sorted.first(where: { TerminalIdentityResolver.normalizeTTY($0.tty) == tty }) {
+            return Scope(shellPid: match.pid,
+                         cwd: match.cwd,
+                         tty: match.tty,
+                         terminal: match.terminal)
         }
         return nil
     }
@@ -100,18 +118,6 @@ final class ShellRegistry {
         return entries.count
     }
 
-    private func updateTerminal(pid: pid_t, touchedAt: Date, terminal: TerminalIdentity?) {
-        lock.lock(); defer { lock.unlock() }
-        guard let existing = entries[pid],
-              existing.touchedAt == touchedAt
-        else { return }
-        entries[pid] = Entry(pid: existing.pid,
-                             cwd: existing.cwd,
-                             tty: existing.tty,
-                             terminal: terminal,
-                             touchedAt: existing.touchedAt)
-    }
-
     private func prune() {
         let cutoff = Date().addingTimeInterval(-ttl)
         entries = entries.filter { $0.value.touchedAt >= cutoff }
@@ -130,10 +136,11 @@ final class ShellRegistry {
             let touchedAt = Date(timeIntervalSince1970: touchedAtSec)
             guard touchedAt >= cutoff else { continue }
             let pid = pid_t(pidNum)
+            let terminal = terminalIdentity(from: item)
             entries[pid] = Entry(pid: pid,
                                  cwd: cwd,
                                  tty: item["tty"] as? String,
-                                 terminal: nil,
+                                 terminal: terminal,
                                  touchedAt: touchedAt)
         }
     }
@@ -149,12 +156,34 @@ final class ShellRegistry {
                 "touched_at": entry.touchedAt.timeIntervalSince1970,
             ]
             if let tty = entry.tty { item["tty"] = tty }
+            if let terminal = entry.terminal {
+                item["terminal_bundle_id"] = terminal.bundleID
+                item["terminal_app_pid"] = Int(terminal.appPID)
+                if let tty = terminal.tty { item["terminal_tty"] = tty }
+                if let cwd = terminal.cwd { item["terminal_cwd"] = cwd }
+                if let surfaceID = terminal.surfaceID { item["terminal_surface_id"] = surfaceID }
+                if let windowID = terminal.windowID { item["terminal_window_id"] = windowID }
+                if let tabID = terminal.tabID { item["terminal_tab_id"] = tabID }
+            }
             return item
         }
         guard let data = try? JSONSerialization.data(withJSONObject: arr, options: []) else {
             return
         }
         try? data.write(to: URL(fileURLWithPath: storePath), options: .atomic)
+    }
+
+    private func terminalIdentity(from item: [String: Any]) -> TerminalIdentity? {
+        guard let bundleID = item["terminal_bundle_id"] as? String,
+              let appPIDNum = item["terminal_app_pid"] as? Int
+        else { return nil }
+        return TerminalIdentity(bundleID: bundleID,
+                                appPID: pid_t(appPIDNum),
+                                tty: item["terminal_tty"] as? String,
+                                cwd: item["terminal_cwd"] as? String,
+                                surfaceID: item["terminal_surface_id"] as? String,
+                                windowID: item["terminal_window_id"] as? String,
+                                tabID: item["terminal_tab_id"] as? String)
     }
 
     // MARK: - process tree walk

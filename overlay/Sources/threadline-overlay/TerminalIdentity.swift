@@ -6,12 +6,26 @@ struct TerminalIdentity: Equatable {
     let bundleID: String
     let appPID: pid_t
     let tty: String?
+    let cwd: String?
     let surfaceID: String?
     let windowID: String?
     let tabID: String?
 }
 
 enum TerminalIdentityResolver {
+    static func focusedTerminal(for target: WindowFinder.Target) -> TerminalIdentity? {
+        switch target.bundleID {
+        case "com.mitchellh.ghostty":
+            return focusedGhosttyIdentity(appPID: target.pid)
+        case "com.googlecode.iterm2":
+            return focusedITermIdentity(appPID: target.pid)
+        case "com.apple.Terminal":
+            return focusedTerminalAppIdentity(appPID: target.pid)
+        default:
+            return nil
+        }
+    }
+
     static func resolve(shellPid: pid_t, cwd: String, tty: String?) -> TerminalIdentity? {
         guard let app = owningTerminalApp(forDescendant: shellPid),
               let bundleID = app.bundleIdentifier
@@ -26,6 +40,7 @@ enum TerminalIdentityResolver {
         return TerminalIdentity(bundleID: bundleID,
                                 appPID: app.processIdentifier,
                                 tty: normalizedTTY,
+                                cwd: cwd,
                                 surfaceID: nil,
                                 windowID: nil,
                                 tabID: nil)
@@ -40,6 +55,7 @@ enum TerminalIdentityResolver {
         return TerminalIdentity(bundleID: bundleID,
                                 appPID: app.processIdentifier,
                                 tty: tty,
+                                cwd: cwd,
                                 surfaceID: nil,
                                 windowID: nil,
                                 tabID: nil)
@@ -83,6 +99,7 @@ enum TerminalIdentityResolver {
             return TerminalIdentity(bundleID: "com.mitchellh.ghostty",
                                     appPID: app.processIdentifier,
                                     tty: tty,
+                                    cwd: cwd,
                                     surfaceID: nil,
                                     windowID: nil,
                                     tabID: nil)
@@ -95,6 +112,7 @@ enum TerminalIdentityResolver {
             return TerminalIdentity(bundleID: "com.mitchellh.ghostty",
                                     appPID: app.processIdentifier,
                                     tty: tty,
+                                    cwd: cwd,
                                     surfaceID: nil,
                                     windowID: nil,
                                     tabID: nil)
@@ -102,9 +120,69 @@ enum TerminalIdentityResolver {
         return TerminalIdentity(bundleID: "com.mitchellh.ghostty",
                                 appPID: app.processIdentifier,
                                 tty: tty,
+                                cwd: cwd,
                                 surfaceID: parts[2],
                                 windowID: parts[0],
                                 tabID: parts[1])
+    }
+
+    private static func focusedGhosttyIdentity(appPID: pid_t) -> TerminalIdentity? {
+        let script = """
+        tell application "Ghostty"
+            set w to front window
+            set t to selected tab of w
+            set term to focused terminal of t
+            return (id of w) & "|" & (id of t) & "|" & (id of term) & "|" & (working directory of term)
+        end tell
+        """
+        guard let out = runAppleScript(script) else { return nil }
+        let parts = out.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4 else { return nil }
+        return TerminalIdentity(bundleID: "com.mitchellh.ghostty",
+                                appPID: appPID,
+                                tty: nil,
+                                cwd: parts[3],
+                                surfaceID: parts[2],
+                                windowID: parts[0],
+                                tabID: parts[1])
+    }
+
+    private static func focusedITermIdentity(appPID: pid_t) -> TerminalIdentity? {
+        let script = """
+        tell application "iTerm2"
+            set s to current session of current window
+            return (tty of s) & "|" & (name of s) & "|" & (id of current tab of current window)
+        end tell
+        """
+        guard let out = runAppleScript(script) else { return nil }
+        let parts = out.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty else { return nil }
+        return TerminalIdentity(bundleID: "com.googlecode.iterm2",
+                                appPID: appPID,
+                                tty: normalizeTTY(parts[0]),
+                                cwd: nil,
+                                surfaceID: nil,
+                                windowID: nil,
+                                tabID: parts.count > 2 ? parts[2] : nil)
+    }
+
+    private static func focusedTerminalAppIdentity(appPID: pid_t) -> TerminalIdentity? {
+        let script = """
+        tell application "Terminal"
+            set t to selected tab of front window
+            return (tty of t) & "|" & (custom title of t)
+        end tell
+        """
+        guard let out = runAppleScript(script) else { return nil }
+        let parts = out.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty else { return nil }
+        return TerminalIdentity(bundleID: "com.apple.Terminal",
+                                appPID: appPID,
+                                tty: normalizeTTY(parts[0]),
+                                cwd: nil,
+                                surfaceID: nil,
+                                windowID: nil,
+                                tabID: nil)
     }
 
     private static func runAppleScript(_ script: String) -> String? {

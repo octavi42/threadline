@@ -120,6 +120,8 @@ enum Daemon {
                 return c.focus(cwd: cwd) ? "selected \(cwd)" : "no folder for \(cwd)"
             }
             return c.focusFrontmostTerminalMessage()
+        case "focus-debug":
+            return c.focusFrontmostTerminalMessage()
         case "hide":
             c.hide();     return "ok"
         case "refresh":

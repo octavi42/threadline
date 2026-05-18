@@ -11,10 +11,9 @@ enum ShellHook {
         """
         \(beginMarker)
         # Pings the threadline daemon on every prompt so the panel knows which
-        # tab/cwd is focused. Drop-and-disown so it never slows a prompt down.
+        # exact terminal tab/surface owns this shell.
         __threadline_touch() {
-            "\(binaryPath)" touch --cwd "$PWD" --pid $$ --tty "$(tty 2>/dev/null || true)" >/dev/null 2>&1 &
-            disown >/dev/null 2>&1 || true
+            "\(binaryPath)" touch --cwd "$PWD" --pid $$ --tty "$(tty 2>/dev/null || true)" >/dev/null 2>&1 || true
         }
         if [ -n "${ZSH_VERSION:-}" ]; then
             typeset -ga precmd_functions

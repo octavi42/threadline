@@ -133,6 +133,15 @@ final class OverlayController {
     @discardableResult
     private func focusFrontmostTerminalContext() -> String {
         guard let target = WindowFinder.frontmostTarget() else { return "no frontmost target" }
+        if let terminal = TerminalIdentityResolver.focusedTerminal(for: target) {
+            let before = model.selectedID
+            let label = terminal.tty ?? terminal.surfaceID ?? terminal.cwd ?? "unknown"
+            let ok = model.selectSnapshot(terminal: terminal)
+            let after = model.selectedID ?? "none"
+            return ok
+                ? "selected focused terminal \(label) id=\(after)"
+                : "no snapshot for focused terminal \(label) previous=\(before ?? "none")"
+        }
         if let scope = ShellRegistry.shared.scope(terminalPid: target.pid) {
             return model.selectSnapshot(scope: scope)
                 ? "selected \(scope.cwd) via touch"

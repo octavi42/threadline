@@ -56,8 +56,7 @@ When `install` runs, a marker block is appended to `~/.zshrc` and `~/.bashrc`:
 ```sh
 # >>> threadline-overlay >>>
 __threadline_touch() {
-    "/Users/you/.local/bin/threadline-overlay" touch --cwd "$PWD" --pid $$ >/dev/null 2>&1 &
-    disown >/dev/null 2>&1 || true
+    "/Users/you/.local/bin/threadline-overlay" touch --cwd "$PWD" --pid $$ --tty "$(tty 2>/dev/null || true)" >/dev/null 2>&1 || true
 }
 # … wires it into precmd_functions / PROMPT_COMMAND
 # <<< threadline-overlay <<<
@@ -65,8 +64,8 @@ __threadline_touch() {
 
 Each prompt pings the daemon with `(pid, cwd, tty)`. The daemon walks the shell's
 parent chain via `sysctl(KERN_PROC_PID)` and finds which terminal app owns it.
-For the frontmost terminal, the most recently-touched shell's cwd becomes the
-scope; the source readers then filter to sessions matching that cwd.
+For Ghostty, the daemon also records the focused terminal surface ID at prompt
+time so same-directory tabs can still be distinguished after a restart.
 
 Press **Return** in the Threadline window, or run `threadline-overlay jump`, to
 focus the selected session's owning terminal/editor. Ghostty records its exact

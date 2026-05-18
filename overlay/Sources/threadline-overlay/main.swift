@@ -7,7 +7,7 @@ let rest = Array(args.dropFirst())
 switch cmd {
 case "daemon":
     Daemon.run()
-case "toggle", "show", "hide", "quit", "status", "refresh", "list", "jump", "focus":
+case "toggle", "show", "hide", "quit", "status", "refresh", "list", "jump", "focus", "focus-debug":
     CLI.send(cmd, args: rest)
 case "touch":
     CLI.touch(args: rest)
@@ -36,6 +36,7 @@ func printUsage() {
       hide         hide the Threadline window
       refresh      force re-scan of session sources
       focus        select the frontmost terminal's project, or --cwd PATH
+      focus-debug  print focused-terminal matching diagnostics
       jump         focus the selected agent's terminal/editor
       status       print daemon pid, window frame, and agent count
       touch        register a shell's cwd with the daemon
