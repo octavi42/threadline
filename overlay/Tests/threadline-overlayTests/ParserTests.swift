@@ -114,6 +114,81 @@ final class CodexSourceTests: XCTestCase {
     }
 }
 
+final class WorkStatusResolverTests: XCTestCase {
+    func testNeedsYouBeatsCodeRiskWhenBlocked() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/Auth.swift"]
+        snap.lastText = "You're out of extra usage · resets later."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .needsYou)
+        XCTAssertEqual(work.reason, "usage limit reached")
+        XCTAssertEqual(work.nextAction, "Jump back")
+    }
+
+    func testRiskyWhenCodeChangedWithoutEvidence() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/Auth.swift", "/tmp/Router.swift"]
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .risky)
+        XCTAssertEqual(work.reason, "2 files changed - no test evidence")
+        XCTAssertEqual(work.nextAction, "Run tests")
+    }
+
+    func testReadyWhenCodeChangedAndTestsPassed() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/Auth.swift"]
+        snap.lastText = "swift test passed"
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .ready)
+        XCTAssertEqual(work.reason, "1 file changed - tests passed")
+        XCTAssertEqual(work.nextAction, "Review diff")
+    }
+
+    func testResearchOnlyDoneIsNotRisky() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Here is the research summary."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .done)
+        XCTAssertEqual(work.reason, "answer complete")
+    }
+
+    func testHelperSummariesAreHidden() {
+        var snap = baseSnapshot(state: .running)
+        snap.lastText = "Summarize this coding-assistant session in 2-3 short sentences."
+
+        XCTAssertFalse(WorkStatusResolver.shouldDisplay(snap))
+    }
+
+    func testSortsAttentionBeforeRecency() {
+        var ready = baseSnapshot(state: .idle, id: "ready")
+        ready.filesEdited = ["/tmp/A.swift"]
+        ready.lastText = "swift test passed"
+        ready.updatedAt = Date()
+
+        var needs = baseSnapshot(state: .idle, id: "needs")
+        needs.lastText = "Please run /login."
+        needs.updatedAt = Date().addingTimeInterval(-3600)
+
+        XCTAssertTrue(WorkStatusResolver.sort(needs, ready))
+    }
+
+    private func baseSnapshot(state: SourceState, id: String = "snap") -> SourceSnapshot {
+        var snap = SourceSnapshot(id: id, tool: "Codex", badge: "CDX")
+        snap.cwd = "/tmp/project"
+        snap.state = state
+        snap.updatedAt = Date()
+        return snap
+    }
+}
+
 // MARK: - helpers
 
 private func fixture(_ name: String) throws -> String {
