@@ -201,6 +201,56 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.status, .done)
     }
 
+    func testChangelogMentionOfRepeatedEditsIsNotStuck() {
+        var snap = baseSnapshot(state: .stale)
+        snap.lastText = """
+        Reduced false Stuck: repeated edits to the same file no longer automatically mean stuck.
+        """
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertNotEqual(work.status, .stuck)
+    }
+
+    func testStaleWithInProgressTasksIsStuck() {
+        var snap = baseSnapshot(state: .stale)
+        snap.tasks = [
+            TaskItem(content: "Finish auth refactor", status: "in_progress"),
+            TaskItem(content: "Run tests", status: "pending"),
+        ]
+        snap.tasksInProgress = 1
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .stuck)
+        XCTAssertEqual(work.reason, "stale with work in progress")
+    }
+
+    func testAllSwiftTestsPassInTranscriptTailIsReady() throws {
+        let path = try fixture("codex_tests_passed.jsonl")
+        var snap = baseSnapshot(state: .idle)
+        snap.jsonlPath = path
+        snap.filesEdited = ["/tmp/A.swift", "/tmp/B.swift"]
+        snap.lastText = "Implemented and restarted the app."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .ready)
+        XCTAssertEqual(work.reason, "2 files changed - tests passed")
+    }
+
+    func testZombieLiveSessionWithChangesIsDoneNotRisky() {
+        var snap = baseSnapshot(state: .idle)
+        snap.livePid = 99
+        snap.updatedAt = Date().addingTimeInterval(-3 * 3600)
+        snap.filesEdited = ["/tmp/old.swift"]
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .done)
+        XCTAssertEqual(work.reason, "old session · unverified changes")
+    }
+
     func testActivityLineCompactsLongAssistantText() {
         var snap = baseSnapshot(state: .idle)
         snap.lastText = """
