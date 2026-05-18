@@ -90,6 +90,7 @@ private struct JumpButton: View {
 
 private struct AgentsList: View {
     @ObservedObject var model: SessionModel
+    @State private var expandedFolderIDs: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -119,21 +120,48 @@ private struct AgentsList: View {
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
                         ForEach(model.folders) { folder in
-                            Section {
-                                FolderHeader(folder: folder)
-                                    .padding(.leading, 4)
-                                    .contentShape(Rectangle())
-                                    .tag(folder.selectionID)
+                            DisclosureGroup(
+                                isExpanded: Binding(
+                                    get: { expandedFolderIDs.contains(folder.id) },
+                                    set: { isExpanded in
+                                        if isExpanded {
+                                            expandedFolderIDs.insert(folder.id)
+                                        } else {
+                                            expandedFolderIDs.remove(folder.id)
+                                        }
+                                    }
+                                )
+                            ) {
                                 ForEach(folder.snapshots) { snap in
                                     AgentRow(snap: snap,
                                              summary: model.summaries[snap.id],
                                              workState: model.workStates[snap.id])
                                         .tag(snap.id)
                                 }
+                            } label: {
+                                FolderHeader(folder: folder)
+                                    .padding(.leading, 4)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        model.selectedID = folder.selectionID
+                                    }
                             }
+                            .tag(folder.selectionID)
                         }
                 }
                 .listStyle(.sidebar)
+                .onAppear {
+                    if expandedFolderIDs.isEmpty {
+                        expandedFolderIDs = Set(model.folders.map(\.id))
+                    }
+                }
+                .onChange(of: model.folders) { folders in
+                    let visible = Set(folders.map(\.id))
+                    expandedFolderIDs = expandedFolderIDs.intersection(visible)
+                    if expandedFolderIDs.isEmpty {
+                        expandedFolderIDs = visible
+                    }
+                }
             }
         }
     }
