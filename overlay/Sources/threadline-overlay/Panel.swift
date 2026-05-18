@@ -47,7 +47,7 @@ final class OverlayController {
 
         self.panel = panel
         let host = NSHostingView(rootView: ContentView(model: model) { [weak self] snap in
-            _ = self?.jump(to: snap)
+            _ = self?.jump(to: snap, hidePanel: false)
         })
         host.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = host
@@ -103,13 +103,15 @@ final class OverlayController {
     }
 
     @discardableResult
-    func jump(to snapshot: SourceSnapshot) -> Bool {
+    func jump(to snapshot: SourceSnapshot, hidePanel: Bool = true) -> Bool {
         guard let result = JumpBack.jump(to: snapshot) else {
             NSSound.beep()
             return false
         }
-        persistFrame()
-        panel.orderOut(nil)
+        if hidePanel {
+            persistFrame()
+            panel.orderOut(nil)
+        }
         FileHandle.standardError.write(Data("jumped to \(result.appName) via \(result.detail)\n".utf8))
         return true
     }
