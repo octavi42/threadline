@@ -9,6 +9,30 @@ enum JumpBack {
         let detail: String
     }
 
+    private static let cursorBundleIDs: Set<String> = [
+        "com.todesktop.230313mzl4w4u92",
+        "com.todesktop.230313mzl4w4u92-insider",
+    ]
+
+    static func canJump(to snapshot: SourceSnapshot?) -> Bool {
+        guard let snapshot = snapshot else { return false }
+        if snapshot.tool == "Cursor" {
+            if runningCursorApp() != nil { return true }
+            guard let cwd = snapshot.cwd, !cwd.isEmpty else { return false }
+            return cursorIsInstalled()
+        }
+        return app(for: snapshot) != nil
+    }
+
+    static func jumpLabel(for snapshot: SourceSnapshot) -> String {
+        if snapshot.tool == "Cursor" { return "Open Cursor workspace" }
+        if let tty = snapshot.tty, !tty.isEmpty { return "Open terminal tab" }
+        if let surfaceID = snapshot.terminalSurfaceID, !surfaceID.isEmpty {
+            return "Open terminal"
+        }
+        return "Open terminal or editor"
+    }
+
     static func jump(to snapshot: SourceSnapshot?) -> Result? {
         guard let snapshot = snapshot else { return nil }
 
@@ -65,14 +89,20 @@ enum JumpBack {
         return nil
     }
 
-    private static func activateCursor(cwd: String?) -> Result? {
-        let cursorBundleIDs: Set<String> = [
-            "com.todesktop.230313mzl4w4u92",
-            "com.todesktop.230313mzl4w4u92-insider",
-        ]
-        if let app = NSWorkspace.shared.runningApplications.first(where: {
+    private static func runningCursorApp() -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first {
             $0.bundleIdentifier.map(cursorBundleIDs.contains) ?? false
-        }) {
+        }
+    }
+
+    private static func cursorIsInstalled() -> Bool {
+        cursorBundleIDs.contains {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+        }
+    }
+
+    private static func activateCursor(cwd: String?) -> Result? {
+        if let app = runningCursorApp() {
             app.activate(options: [.activateIgnoringOtherApps])
             return Result(appName: app.localizedName ?? "Cursor",
                           exactTab: false,

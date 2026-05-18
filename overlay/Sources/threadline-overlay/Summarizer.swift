@@ -71,15 +71,16 @@ final class Summarizer {
         lock.lock()
         if let hit = memory[path], hit.mtime == mtime {
             lock.unlock()
-            return hit.text
+            return SourceSnapshot.normalizeSummary(hit.text)
         }
         if let disk = loadDisk(path: path), disk.mtime == mtime {
-            memory[path] = disk
+            let normalized = SourceSnapshot.normalizeSummary(disk.text)
+            memory[path] = CacheEntry(mtime: disk.mtime, text: normalized)
             lock.unlock()
-            return disk.text
+            return normalized
         }
         if inflight.contains(path) {
-            let stale = memory[path]?.text
+            let stale = memory[path].map { SourceSnapshot.normalizeSummary($0.text) }
             lock.unlock()
             return stale
         }
@@ -98,7 +99,7 @@ final class Summarizer {
                 DispatchQueue.main.async { onUpdate(text) }
             }
         }
-        return memory[path]?.text
+        return memory[path].map { SourceSnapshot.normalizeSummary($0.text) }
     }
 
     // MARK: - dispatch
@@ -116,12 +117,13 @@ final class Summarizer {
                    ?? runCodexCLI(content: content, previous: previous)
                    ?? runAnthropicAPI(content: content, previous: previous)
         guard let text = summary, !text.isEmpty else { return nil }
-        let entry = CacheEntry(mtime: mtime, text: text)
+        let normalized = SourceSnapshot.normalizeSummary(text)
+        let entry = CacheEntry(mtime: mtime, text: normalized)
         lock.lock()
         memory[path] = entry
         lock.unlock()
         saveDisk(path: path, entry: entry)
-        return text
+        return normalized
     }
 
     private func promptWithContinuity(previous: String?) -> String {
@@ -168,7 +170,7 @@ final class Summarizer {
         req.setValue("2023-06-01",        forHTTPHeaderField: "anthropic-version")
         let payload: [String: Any] = [
             "model": "claude-haiku-4-5",
-            "max_tokens": 280,
+            "max_tokens": 60,
             "system": promptWithContinuity(previous: previous),
             "messages": [["role": "user", "content": content]],
         ]
@@ -355,7 +357,7 @@ final class Summarizer {
 
     /// Bump when the prompt or extraction logic changes — old cache entries
     /// then naturally turn into cache misses and get re-generated.
-    private static let cacheVersion = 3
+    private static let cacheVersion = 4
 
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037

@@ -1,0 +1,8 @@
+{"timestamp":"2026-05-14T10:00:00.000Z","type":"session_meta","payload":{"id":"tests-pass-1","cwd":"/Users/test/proj","originator":"codex-tui","cli_version":"0.130.0","model":"gpt-5","model_context_window":256000}}
+{"timestamp":"2026-05-14T10:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"wire up the overlay"}}
+{"timestamp":"2026-05-14T10:00:09.500Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":"*** Begin Patch\n*** Update File: /tmp/A.swift\n@@\n+let x = 1\n*** Update File: /tmp/B.swift\n@@\n+let y = 2\n*** End Patch","status":"completed"}}
+{"timestamp":"2026-05-14T10:00:09.600Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call_patch","success":true,"stdout":"Success.","stderr":"","changes":{"/tmp/A.swift":{"type":"update","unified_diff":"@@\n+let x = 1\n"},"/tmp/B.swift":{"type":"update","unified_diff":"@@\n+let y = 2\n"}}}}
+{"timestamp":"2026-05-14T10:00:15.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"swift test\"}","call_id":"call_test"}}
+{"timestamp":"2026-05-14T10:00:20.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Verified with swift test. All Swift tests pass."}}
+{"timestamp":"2026-05-14T10:00:21.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Implemented and restarted the app."}]}}
+{"timestamp":"2026-05-14T10:00:22.000Z","type":"event_msg","payload":{"type":"task_complete"}}

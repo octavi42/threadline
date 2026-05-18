@@ -201,6 +201,74 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.status, .done)
     }
 
+    func testExitCode10IsNotFailedTests() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Process finished with exit code 10."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertNotEqual(work.status, .testsFailed)
+    }
+
+    func testExitCode1IsFailedTests() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Command failed with exit code: 1"
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .testsFailed)
+    }
+
+    func testChangelogMentionOfRepeatedEditsIsNotStuck() {
+        var snap = baseSnapshot(state: .stale)
+        snap.lastText = """
+        Reduced false Stuck: repeated edits to the same file no longer automatically mean stuck.
+        """
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertNotEqual(work.status, .stuck)
+    }
+
+    func testStaleWithInProgressTasksIsStuck() {
+        var snap = baseSnapshot(state: .stale)
+        snap.tasks = [
+            TaskItem(content: "Finish auth refactor", status: "in_progress"),
+            TaskItem(content: "Run tests", status: "pending"),
+        ]
+        snap.tasksInProgress = 1
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .stuck)
+        XCTAssertEqual(work.reason, "stale with work in progress")
+    }
+
+    func testAllSwiftTestsPassInTranscriptTailIsReady() throws {
+        let path = try fixture("codex_tests_passed.jsonl")
+        var snap = baseSnapshot(state: .idle)
+        snap.jsonlPath = path
+        snap.filesEdited = ["/tmp/A.swift", "/tmp/B.swift"]
+        snap.lastText = "Implemented and restarted the app."
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .ready)
+        XCTAssertEqual(work.reason, "2 files changed - tests passed")
+    }
+
+    func testZombieLiveSessionWithChangesIsDoneNotRisky() {
+        var snap = baseSnapshot(state: .idle)
+        snap.livePid = 99
+        snap.updatedAt = Date().addingTimeInterval(-3 * 3600)
+        snap.filesEdited = ["/tmp/old.swift"]
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .done)
+        XCTAssertEqual(work.reason, "old session · unverified changes")
+    }
+
     func testActivityLineCompactsLongAssistantText() {
         var snap = baseSnapshot(state: .idle)
         snap.lastText = """
@@ -217,6 +285,25 @@ final class WorkStatusResolverTests: XCTestCase {
 
         XCTAssertEqual(SourceSnapshot.compactLine(text, limit: 48),
                        "Threadline is rebuilding the session inbox...")
+    }
+
+    func testNormalizeSummaryCapsWordCount() {
+        let text = """
+        Threadline is rebuilding the session inbox around concise current activity summaries
+        for active agents so nobody reads long transcript style messages anymore
+        """
+
+        let normalized = SourceSnapshot.normalizeSummary(text)
+        let words = normalized.split(separator: " ", omittingEmptySubsequences: true)
+
+        XCTAssertLessThanOrEqual(words.count, 13) // 12 words + optional "..."
+        XCTAssertTrue(normalized.hasSuffix("..."))
+    }
+
+    func testNormalizeSummaryIsIdempotent() {
+        let raw = "Fixing overlay summary compaction and normalizing cached session text"
+        let once = SourceSnapshot.normalizeSummary(raw)
+        XCTAssertEqual(SourceSnapshot.normalizeSummary(once), once)
     }
 
     private func baseSnapshot(state: SourceState, id: String = "snap") -> SourceSnapshot {

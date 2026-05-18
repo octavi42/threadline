@@ -130,8 +130,15 @@ struct SourceSnapshot: Identifiable, Equatable {
         return parts.joined(separator: " · ")
     }
 
-    /// Short token-count label: "412", "4.2K", "120K", "1.2M".
-    static func compactLine(_ text: String, limit: Int = 96) -> String {
+    /// One-line LLM summary: word-capped and length-limited for every surface.
+    static func normalizeSummary(_ text: String) -> String {
+        compactLine(text, limit: 96, maxWords: 12, firstSentence: false)
+    }
+
+    static func compactLine(_ text: String,
+                            limit: Int = 96,
+                            maxWords: Int? = nil,
+                            firstSentence: Bool = true) -> String {
         var line = text
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\t", with: " ")
@@ -139,10 +146,17 @@ struct SourceSnapshot: Identifiable, Equatable {
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let end = line.firstIndex(where: { ".!?".contains($0) }) {
+        if firstSentence, let end = line.firstIndex(where: { ".!?".contains($0) }) {
             let sentenceEnd = line.index(after: end)
-            let firstSentence = String(line[..<sentenceEnd])
-            if firstSentence.count >= 24 { line = firstSentence }
+            let trimmed = String(line[..<sentenceEnd])
+            if trimmed.count >= 24 { line = trimmed }
+        }
+
+        if let maxWords = maxWords {
+            let words = line.split(separator: " ", omittingEmptySubsequences: true)
+            if words.count > maxWords {
+                line = words.prefix(maxWords).joined(separator: " ") + "..."
+            }
         }
 
         guard line.count > limit else { return line }
@@ -397,11 +411,12 @@ final class SessionModel: ObservableObject {
             forJSONL: path,
             mtime: mtime,
             onUpdate: { [weak self] text in
-                self?.summaries[id] = text
+                self?.summaries[id] = SourceSnapshot.normalizeSummary(text)
             }
         )
-        if let cached = cached, summaries[id] != cached {
-            summaries[id] = cached
+        if let cached = cached {
+            let normalized = SourceSnapshot.normalizeSummary(cached)
+            if summaries[id] != normalized { summaries[id] = normalized }
         }
     }
 

@@ -38,13 +38,14 @@ private func workStatusColor(_ status: WorkStatus) -> Color {
 
 struct ContentView: View {
     @ObservedObject var model: SessionModel
+    let onJump: (SourceSnapshot) -> Void
     @State private var tab: DetailTab = .overview
 
     var body: some View {
         HSplitView {
             AgentsList(model: model)
                 .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
-            DetailsPane(model: model, tab: $tab)
+            DetailsPane(model: model, tab: $tab, onJump: onJump)
                 .frame(minWidth: 360)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -56,9 +57,43 @@ struct ContentView: View {
 
 // MARK: - sidebar
 
+private struct JumpButton: View {
+    let snap: SourceSnapshot
+    let onJump: (SourceSnapshot) -> Void
+
+    private var enabled: Bool { JumpBack.canJump(to: snap) }
+
+    var body: some View {
+        Button {
+            onJump(snap)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.forward")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Open")
+                    .font(.system(size: 11, weight: .medium))
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(enabled ? .accentColor : .secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.accentColor.opacity(enabled ? 0.12 : 0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color.accentColor.opacity(enabled ? 0.35 : 0.15), lineWidth: 0.5)
+        )
+        .help(JumpBack.jumpLabel(for: snap))
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+    }
+}
+
 private struct AgentsList: View {
     @ObservedObject var model: SessionModel
-    @State private var expandedFolderIDs: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -88,18 +123,11 @@ private struct AgentsList: View {
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
                         ForEach(model.folders) { folder in
-                            DisclosureGroup(
-                                isExpanded: Binding(
-                                    get: { expandedFolderIDs.contains(folder.id) },
-                                    set: { isExpanded in
-                                        if isExpanded {
-                                            expandedFolderIDs.insert(folder.id)
-                                        } else {
-                                            expandedFolderIDs.remove(folder.id)
-                                        }
-                                    }
-                                )
-                            ) {
+                            Section {
+                                FolderHeader(folder: folder)
+                                    .padding(.leading, 4)
+                                    .contentShape(Rectangle())
+                                    .tag(folder.selectionID)
                                 ForEach(folder.snapshots) { snap in
                                     AgentRow(snap: snap,
                                              summary: model.summaries[snap.id],
@@ -107,30 +135,9 @@ private struct AgentsList: View {
                                         .tag(snap.id)
                                 }
                             }
-                            label: {
-                                FolderHeader(folder: folder)
-                                    .padding(.leading, 4)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        model.selectedID = folder.selectionID
-                                    }
-                            }
-                            .tag(folder.selectionID)
                         }
                 }
                 .listStyle(.sidebar)
-                .onAppear {
-                    if expandedFolderIDs.isEmpty {
-                        expandedFolderIDs = Set(model.folders.map(\.id))
-                    }
-                }
-                .onChange(of: model.folders) { folders in
-                    let visible = Set(folders.map(\.id))
-                    expandedFolderIDs = expandedFolderIDs.intersection(visible)
-                    if expandedFolderIDs.isEmpty {
-                        expandedFolderIDs = visible
-                    }
-                }
             }
         }
     }
@@ -180,7 +187,7 @@ private struct AgentRow: View {
     let workState: WorkState?
     var body: some View {
         let work = workState ?? snap.workState
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 6) {
             Circle()
                 .fill(workStatusColor(work.status))
                 .frame(width: 7, height: 7)
@@ -195,7 +202,6 @@ private struct AgentRow: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(workStatusColor(work.status))
                         .lineLimit(1)
-                    Spacer(minLength: 0)
                 }
                 Text(work.reason)
                     .font(.system(size: 10))
@@ -220,7 +226,7 @@ private struct AgentRow: View {
     }
     private var secondaryLine: String? {
         if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-            return SourceSnapshot.compactLine(s)
+            return s
         }
         let fallback = snap.activityLine.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback == "—" ? nil : fallback
@@ -232,11 +238,14 @@ private struct AgentRow: View {
 private struct DetailsPane: View {
     @ObservedObject var model: SessionModel
     @Binding var tab: DetailTab
+    let onJump: (SourceSnapshot) -> Void
 
     var body: some View {
         if let snap = model.selectedSnapshot {
             VStack(alignment: .leading, spacing: 0) {
-                DetailHeader(snap: snap, workState: model.workStates[snap.id] ?? snap.workState)
+                DetailHeader(snap: snap,
+                             workState: model.workStates[snap.id] ?? snap.workState,
+                             onJump: onJump)
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
                     .padding(.bottom, 10)
@@ -499,6 +508,7 @@ private struct FolderFilesView: View {
 private struct DetailHeader: View {
     let snap: SourceSnapshot
     let workState: WorkState
+    let onJump: (SourceSnapshot) -> Void
     var body: some View {
         let work = workState
         VStack(alignment: .leading, spacing: 8) {
@@ -512,6 +522,8 @@ private struct DetailHeader: View {
                     .font(.system(size: 20, weight: .regular, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
+                JumpButton(snap: snap, onJump: onJump)
+                    .layoutPriority(1)
                 Text(snap.timeAgoShort)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -534,7 +546,7 @@ private struct OverviewView: View {
             WorkSummaryView(snap: snap, work: work)
             statsGrid
             if let task = snap.currentTask, !task.isEmpty {
-                section(label: "Current task", text: task)
+                section(label: "Current task", text: SourceSnapshot.compactLine(task))
             }
             if let last = snap.lastTool, !last.isEmpty {
                 section(label: "Last action", text: last, mono: true)

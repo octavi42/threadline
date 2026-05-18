@@ -19,7 +19,19 @@ final class WorkClassifier {
                                       attributes: .concurrent)
     private let processSemaphore = DispatchSemaphore(value: 1)
 
-    private init() {}
+    private init() {
+        purgeOldCacheVersions()
+    }
+
+    private func purgeOldCacheVersions() {
+        let fm = FileManager.default
+        let dir = cacheDir
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+        let activeSuffix = ".v\(Self.cacheVersion).work.json"
+        for name in entries where name.hasSuffix(".work.json") && !name.hasSuffix(activeSuffix) {
+            try? fm.removeItem(atPath: (dir as NSString).appendingPathComponent(name))
+        }
+    }
 
     func classify(snap: SourceSnapshot,
                   onUpdate: @escaping (WorkState) -> Void) -> WorkState? {
@@ -62,6 +74,7 @@ final class WorkClassifier {
         guard let evidence = buildEvidence(snap: snap, path: path) else { return nil }
         let raw = runClaudeCLI(evidence: evidence)
                ?? runCodexCLI(evidence: evidence)
+               ?? runAnthropicAPI(evidence: evidence)
         guard let work = parseWorkState(raw) else { return nil }
         let entry = CacheEntry(mtime: mtime, work: work)
         lock.lock()
@@ -289,6 +302,7 @@ final class WorkClassifier {
         let candidates: [String] = [
             "/Users/\(NSUserName())/.bun/bin/\(binary)",
             "/Users/\(NSUserName())/.npm-global/bin/\(binary)",
+            "/Users/\(NSUserName())/.nvm/versions/node/v22.22.1/bin/\(binary)",
             "/opt/homebrew/bin/\(binary)",
             "/usr/local/bin/\(binary)",
             "/Users/\(NSUserName())/.local/bin/\(binary)",
@@ -296,7 +310,66 @@ final class WorkClassifier {
         for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
             return p
         }
-        return nil
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-l", "-c", "which \(binary)"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                         encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (out?.isEmpty == false && FileManager.default.isExecutableFile(atPath: out!)) ? out : nil
+    }
+
+    private func readAPIKey() -> String? {
+        if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"],
+           !env.isEmpty { return env }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let configPath = "\(home)/.threadline/config.json"
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let key = obj["anthropic_api_key"] as? String, !key.isEmpty
+        else { return nil }
+        return key
+    }
+
+    private func runAnthropicAPI(evidence: String) -> String? {
+        guard let key = readAPIKey() else { return nil }
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 25
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(key, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        let system = """
+        Classify the AI coding session from the user message. \
+        Return only one JSON object with keys status, reason, nextAction. \
+        status must be one of: Needs you, Tests failed, Stuck, Risky, Ready, Working, Done.
+        """
+        let payload: [String: Any] = [
+            "model": "claude-haiku-4-5",
+            "max_tokens": 120,
+            "system": system,
+            "messages": [["role": "user", "content": evidence]],
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        req.httpBody = body
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var responseText: String?
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { semaphore.signal() }
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = obj["content"] as? [[String: Any]] else { return }
+            let texts = content.compactMap { $0["text"] as? String }
+            let joined = texts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { responseText = joined }
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 25)
+        return responseText
     }
 
     private func runProcess(exe: String, args: [String], stdin: String, timeout: TimeInterval) -> String? {
@@ -372,7 +445,7 @@ final class WorkClassifier {
         }
     }
 
-    private static let cacheVersion = 1
+    private static let cacheVersion = 2
 
     private func cacheFilePath(for jsonlPath: String) -> String {
         var hash: UInt64 = 14695981039346656037
