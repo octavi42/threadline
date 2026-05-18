@@ -249,6 +249,113 @@ struct SessionFolder: Identifiable, Equatable {
     var latestSnapshot: SourceSnapshot? {
         snapshots.first
     }
+
+    func filesSummary() -> FolderFilesSummary {
+        let files = mergedFiles()
+        return FolderFilesSummary(
+            fileCount: files.count,
+            linesAdded: files.reduce(0) { $0 + $1.linesAdded },
+            linesRemoved: files.reduce(0) { $0 + $1.linesRemoved }
+        )
+    }
+
+    /// Paths touched by any session in this project, merged and ranked by churn.
+    func mergedFiles() -> [FolderMergedFile] {
+        struct Acc {
+            var edits: [MergedFileEdit] = []
+            var linesAdded = 0
+            var linesRemoved = 0
+            var tools: Set<String> = []
+            var snapshotIDs: Set<String> = []
+        }
+
+        var byPath: [String: Acc] = [:]
+
+        for snap in snapshots {
+            for group in snap.fileChanges {
+                let path = group.path
+                var acc = byPath[path] ?? Acc()
+                for op in group.edits {
+                    acc.edits.append(MergedFileEdit(
+                        id: "\(snap.id):\(op.seq)",
+                        sourceSnapshotID: snap.id,
+                        sourceTool: snap.tool,
+                        op: op
+                    ))
+                }
+                acc.linesAdded += group.linesAdded
+                acc.linesRemoved += group.linesRemoved
+                acc.tools.insert(snap.tool)
+                acc.snapshotIDs.insert(snap.id)
+                byPath[path] = acc
+            }
+            for path in snap.filesEdited {
+                var acc = byPath[path] ?? Acc()
+                acc.tools.insert(snap.tool)
+                acc.snapshotIDs.insert(snap.id)
+                byPath[path] = acc
+            }
+        }
+
+        return byPath.map { path, acc in
+            let sortedEdits = acc.edits.sorted {
+                if $0.sourceSnapshotID != $1.sourceSnapshotID {
+                    return $0.sourceSnapshotID < $1.sourceSnapshotID
+                }
+                return $0.op.seq < $1.op.seq
+            }
+            return FolderMergedFile(
+                path: path,
+                linesAdded: acc.linesAdded,
+                linesRemoved: acc.linesRemoved,
+                editCount: sortedEdits.count,
+                tools: acc.tools.sorted(),
+                edits: sortedEdits,
+                sourceSnapshotIDs: acc.snapshotIDs.sorted()
+            )
+        }
+        .sorted { a, b in
+            if a.churn != b.churn { return a.churn > b.churn }
+            if a.editCount != b.editCount { return a.editCount > b.editCount }
+            return a.path < b.path
+        }
+    }
+}
+
+struct FolderFilesSummary: Equatable {
+    let fileCount: Int
+    let linesAdded: Int
+    let linesRemoved: Int
+}
+
+/// One edit op in a project-level merge — composite id spans sessions.
+struct MergedFileEdit: Identifiable, Equatable {
+    let id: String
+    let sourceSnapshotID: String
+    let sourceTool: String
+    let op: FileEditOp
+}
+
+/// One file row in the project-level files digest.
+struct FolderMergedFile: Identifiable, Equatable {
+    var id: String { path }
+    let path: String
+    let linesAdded: Int
+    let linesRemoved: Int
+    let editCount: Int
+    let tools: [String]
+    let edits: [MergedFileEdit]
+    let sourceSnapshotIDs: [String]
+
+    var churn: Int { linesAdded + linesRemoved }
+
+    var toolsLabel: String {
+        guard !tools.isEmpty else { return "" }
+        if tools.count <= 2 { return tools.joined(separator: ", ") }
+        return "\(tools[0]), \(tools[1]) +\(tools.count - 2)"
+    }
+
+    var hasDiffContent: Bool { !edits.isEmpty }
 }
 
 final class SessionModel: ObservableObject {
@@ -264,6 +371,9 @@ final class SessionModel: ObservableObject {
     /// File paths the user has expanded in the Files tab. Stored here so the
     /// 3-second refresh cycle doesn't reset the expansion state.
     @Published var expandedFiles: Set<String> = []
+    /// Project folders the user collapsed in the agents sidebar. Absence means
+    /// expanded; stored on the model so the 3-second refresh does not reset it.
+    @Published var collapsedFolderIDs: Set<String> = []
     private var timer: Timer?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
@@ -303,7 +413,10 @@ final class SessionModel: ObservableObject {
                               firstID: String?,
                               pollInterval: TimeInterval) {
         if all != snapshots { self.snapshots = all }
-        if folders != self.folders { self.folders = folders }
+        if folders != self.folders {
+            self.folders = folders
+            pruneCollapsedFolders(visible: folders.map(\.id))
+        }
         if selectedID == nil || selectedSnapshot == nil && selectedFolder == nil {
             selectedID = firstID
         }
@@ -519,5 +632,22 @@ final class SessionModel: ObservableObject {
         }
         selectedID = snap.id
         return true
+    }
+
+    func isFolderExpanded(_ folderID: String) -> Bool {
+        !collapsedFolderIDs.contains(folderID)
+    }
+
+    func toggleFolderExpansion(_ folderID: String) {
+        if collapsedFolderIDs.contains(folderID) {
+            collapsedFolderIDs.remove(folderID)
+        } else {
+            collapsedFolderIDs.insert(folderID)
+        }
+    }
+
+    private func pruneCollapsedFolders(visible folderIDs: [String]) {
+        let visibleSet = Set(folderIDs)
+        collapsedFolderIDs = collapsedFolderIDs.intersection(visibleSet)
     }
 }
