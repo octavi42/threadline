@@ -97,6 +97,13 @@ private struct AgentsList: View {
         }.count
     }
 
+    private var hiddenOlderCount: Int {
+        model.snapshots.filter { snap in
+            !WorkStatusResolver.isRecentForInbox(snap)
+                && !WorkStatusResolver.isInactiveInbox(model.workState(for: snap))
+        }.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -104,6 +111,14 @@ private struct AgentsList: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
+                if hiddenOlderCount > 0 {
+                    Button(model.showOlderSessions ? "Hide older" : "Show \(hiddenOlderCount) older") {
+                        model.setShowOlderSessions(!model.showOlderSessions)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                }
                 if hiddenDoneCount > 0 {
                     Button(model.showInactiveSessions ? "Hide done" : "Show \(hiddenDoneCount) done") {
                         model.setShowInactiveSessions(!model.showInactiveSessions)
@@ -134,11 +149,21 @@ private struct AgentsList: View {
                     Text("all sessions quiet")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
-                    if hiddenDoneCount > 0 {
-                        Button("Show \(hiddenDoneCount) done") {
-                            model.setShowInactiveSessions(true)
+                    if hiddenOlderCount > 0 || hiddenDoneCount > 0 {
+                        HStack(spacing: 10) {
+                            if hiddenOlderCount > 0 {
+                                Button("Show \(hiddenOlderCount) older") {
+                                    model.setShowOlderSessions(true)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            if hiddenDoneCount > 0 {
+                                Button("Show \(hiddenDoneCount) done") {
+                                    model.setShowInactiveSessions(true)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.plain)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.secondary)
                     }

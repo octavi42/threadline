@@ -421,6 +421,8 @@ final class SessionModel: ObservableObject {
     @Published var collapsedFolderIDs: Set<String> = []
     /// When false, hide `Done` sessions so the sidebar is an action inbox.
     @Published var showInactiveSessions = false
+    /// When false, hide sessions older than 24h (live PIDs always stay visible).
+    @Published var showOlderSessions = false
     private var timer: Timer?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
@@ -464,7 +466,8 @@ final class SessionModel: ObservableObject {
         }
         let preferred = Self.preferredSelectionID(
             snapshots: all,
-            showInactive: showInactiveSessions
+            showInactive: showInactiveSessions,
+            showOlder: showOlderSessions
         )
         maintainSelection(preferredID: preferred)
         if pollInterval != currentPollInterval {
@@ -562,6 +565,7 @@ final class SessionModel: ObservableObject {
         let mapped: [SessionFolder] = folders.compactMap { folder in
             let visible = folder.visibleSnapshots(
                 showInactive: showInactiveSessions,
+                showOlder: showOlderSessions,
                 workStates: [:]
             )
             guard !visible.isEmpty else { return nil }
@@ -578,19 +582,32 @@ final class SessionModel: ObservableObject {
     }
 
     private static func preferredSelectionID(snapshots: [SourceSnapshot],
-                                             showInactive: Bool) -> String? {
-        let visible = showInactive
-            ? snapshots
-            : snapshots.filter { !WorkStatusResolver.isInactiveInbox($0.workState) }
-        return visible.first?.id
+                                             showInactive: Bool,
+                                             showOlder: Bool) -> String? {
+        snapshots
+            .filter {
+                WorkStatusResolver.isVisibleInInbox(
+                    $0,
+                    showInactive: showInactive,
+                    showOlder: showOlder
+                )
+            }
+            .first?
+            .id
+    }
+
+    func isInboxVisible(_ snap: SourceSnapshot) -> Bool {
+        WorkStatusResolver.isVisibleInInbox(
+            snap,
+            showInactive: showInactiveSessions,
+            showOlder: showOlderSessions
+        )
     }
 
     private func maintainSelection(preferredID: String?) {
         if let id = selectedID {
-            if selectedSnapshot != nil {
-                if !showInactiveSessions,
-                   let snap = selectedSnapshot,
-                   WorkStatusResolver.isInactiveInbox(workState(for: snap)) {
+            if let snap = selectedSnapshot {
+                if !isInboxVisible(snap) {
                     selectedID = preferredID
                 }
                 return
@@ -606,11 +623,21 @@ final class SessionModel: ObservableObject {
     func setShowInactiveSessions(_ value: Bool) {
         guard showInactiveSessions != value else { return }
         showInactiveSessions = value
-        let preferred = Self.preferredSelectionID(
+        maintainSelection(preferredID: Self.preferredSelectionID(
             snapshots: snapshots,
-            showInactive: value
-        )
-        maintainSelection(preferredID: preferred)
+            showInactive: value,
+            showOlder: showOlderSessions
+        ))
+    }
+
+    func setShowOlderSessions(_ value: Bool) {
+        guard showOlderSessions != value else { return }
+        showOlderSessions = value
+        maintainSelection(preferredID: Self.preferredSelectionID(
+            snapshots: snapshots,
+            showInactive: showInactiveSessions,
+            showOlder: value
+        ))
     }
 
     private func normalizedCwd(_ cwd: String?) -> String {

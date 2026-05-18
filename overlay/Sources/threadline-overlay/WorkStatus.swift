@@ -149,6 +149,24 @@ enum WorkStatusResolver {
         work.status == .done
     }
 
+    /// Default inbox only surfaces sessions touched in the last day (live PIDs always show).
+    static let inboxRecentWindow: TimeInterval = 24 * 3600
+
+    static func isRecentForInbox(_ snap: SourceSnapshot, now: Date = Date()) -> Bool {
+        if snap.livePid != nil { return true }
+        guard let updatedAt = snap.updatedAt else { return false }
+        return now.timeIntervalSince(updatedAt) < inboxRecentWindow
+    }
+
+    static func isVisibleInInbox(_ snap: SourceSnapshot,
+                                 showInactive: Bool,
+                                 showOlder: Bool,
+                                 now: Date = Date()) -> Bool {
+        if !showInactive, isInactiveInbox(snap.workState) { return false }
+        if !showOlder, !isRecentForInbox(snap, now: now) { return false }
+        return true
+    }
+
     static func sort(_ a: SourceSnapshot, _ b: SourceSnapshot) -> Bool {
         sortByWork(a.workState, b.workState, a: a, b: b)
     }
@@ -503,11 +521,15 @@ extension SessionFolder {
         return FolderTrustSummary(counts: counts, worstRank: worst, attentionCount: attention)
     }
 
-    func visibleSnapshots(showInactive: Bool, workStates: [String: WorkState]) -> [SourceSnapshot] {
-        guard !showInactive else { return snapshots }
-        return snapshots.filter { snap in
-            let work = workStates[snap.id] ?? snap.workState
-            return !WorkStatusResolver.isInactiveInbox(work)
+    func visibleSnapshots(showInactive: Bool,
+                          showOlder: Bool,
+                          workStates: [String: WorkState]) -> [SourceSnapshot] {
+        snapshots.filter { snap in
+            WorkStatusResolver.isVisibleInInbox(
+                snap,
+                showInactive: showInactive,
+                showOlder: showOlder
+            )
         }
     }
 

@@ -485,10 +485,31 @@ final class FolderTrustSummaryTests: XCTestCase {
                 snap(id: "b", status: .done),
             ]
         )
-        let visible = folder.visibleSnapshots(showInactive: false, workStates: [:])
+        let visible = folder.visibleSnapshots(showInactive: false, showOlder: true, workStates: [:])
         XCTAssertEqual(visible.map(\.id), ["a"])
-        let all = folder.visibleSnapshots(showInactive: true, workStates: [:])
+        let all = folder.visibleSnapshots(showInactive: true, showOlder: true, workStates: [:])
         XCTAssertEqual(all.count, 2)
+    }
+
+    func testVisibleSnapshotsHidesOlderThan24h() {
+        var recent = snap(id: "recent", status: .risky)
+        recent.updatedAt = Date()
+        var old = snap(id: "old", status: .stuck)
+        old.updatedAt = Date().addingTimeInterval(-25 * 3600)
+        let folder = SessionFolder(cwd: "/tmp/project", snapshots: [recent, old])
+        let visible = folder.visibleSnapshots(showInactive: false, showOlder: false, workStates: [:])
+        XCTAssertEqual(visible.map(\.id), ["recent"])
+        let withOlder = folder.visibleSnapshots(showInactive: false, showOlder: true, workStates: [:])
+        XCTAssertEqual(withOlder.count, 2)
+    }
+
+    func testLivePidAlwaysVisibleInInbox() {
+        var oldLive = snap(id: "live", status: .stuck)
+        oldLive.updatedAt = Date().addingTimeInterval(-48 * 3600)
+        oldLive.livePid = 999
+        let folder = SessionFolder(cwd: "/tmp/project", snapshots: [oldLive])
+        let visible = folder.visibleSnapshots(showInactive: false, showOlder: false, workStates: [:])
+        XCTAssertEqual(visible.map(\.id), ["live"])
     }
 
     private func snap(id: String, status: WorkStatus) -> SourceSnapshot {
