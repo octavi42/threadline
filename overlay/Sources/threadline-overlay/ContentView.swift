@@ -320,7 +320,7 @@ private struct DetailsPane: View {
                         switch tab {
                         case .overview: OverviewView(model: model,
                                                      snap: snap,
-                                                     workState: model.detailWorkState(for: snap))
+                                                     workState: model.workState(for: snap))
                         case .tasks:    TasksView(snap: snap)
                         case .files:    FilesView(model: model, snap: snap)
                         }

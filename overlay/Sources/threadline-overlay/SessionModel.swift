@@ -413,9 +413,6 @@ final class SessionModel: ObservableObject {
     /// LLM summaries keyed by snapshot id (= absolute JSONL path with prefix).
     /// Lands asynchronously when the Summarizer completes a fetch.
     @Published var summaries: [String: String] = [:]
-    /// LLM-classified work state keyed by snapshot id. Falls back to
-    /// WorkStatusResolver until the classifier lands.
-    @Published var workStates: [String: WorkState] = [:]
     /// File paths the user has expanded in the Files tab. Stored here so the
     /// 3-second refresh cycle doesn't reset the expansion state.
     @Published var expandedFiles: Set<String> = []
@@ -467,7 +464,6 @@ final class SessionModel: ObservableObject {
         }
         let preferred = Self.preferredSelectionID(
             snapshots: all,
-            workStates: workStates,
             showInactive: showInactiveSessions
         )
         maintainSelection(preferredID: preferred)
@@ -556,14 +552,9 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    /// Inbox trust labels — deterministic and stable until the session log changes.
+    /// Trust label — deterministic and stable until the session log changes.
     func workState(for snap: SourceSnapshot) -> WorkState {
         snap.workState
-    }
-
-    /// Detail pane may use LLM classification when available.
-    func detailWorkState(for snap: SourceSnapshot) -> WorkState {
-        workStates[snap.id] ?? snap.workState
     }
 
     /// Folders and sessions for the sidebar trust board (respects `showInactiveSessions`).
@@ -571,7 +562,7 @@ final class SessionModel: ObservableObject {
         let mapped: [SessionFolder] = folders.compactMap { folder in
             let visible = folder.visibleSnapshots(
                 showInactive: showInactiveSessions,
-                workStates: workStates
+                workStates: [:]
             )
             guard !visible.isEmpty else { return nil }
             var f = folder
@@ -579,7 +570,7 @@ final class SessionModel: ObservableObject {
             f.stats = SessionFolder.makeStats(from: visible)
             return f
         }
-        return mapped.sorted { WorkStatusResolver.folderSort($0, $1, workStates: workStates) }
+        return mapped.sorted { WorkStatusResolver.folderSort($0, $1, workStates: [:]) }
     }
 
     var inboxSnapshotCount: Int {
@@ -587,13 +578,10 @@ final class SessionModel: ObservableObject {
     }
 
     private static func preferredSelectionID(snapshots: [SourceSnapshot],
-                                             workStates: [String: WorkState],
                                              showInactive: Bool) -> String? {
         let visible = showInactive
             ? snapshots
-            : snapshots.filter {
-                !WorkStatusResolver.isInactiveInbox(workStates[$0.id] ?? $0.workState)
-            }
+            : snapshots.filter { !WorkStatusResolver.isInactiveInbox($0.workState) }
         return visible.first?.id
     }
 
@@ -620,7 +608,6 @@ final class SessionModel: ObservableObject {
         showInactiveSessions = value
         let preferred = Self.preferredSelectionID(
             snapshots: snapshots,
-            workStates: workStates,
             showInactive: value
         )
         maintainSelection(preferredID: preferred)
@@ -659,20 +646,6 @@ final class SessionModel: ObservableObject {
         }
     }
 
-    private func kickoffWorkClassification(for snap: SourceSnapshot) {
-        guard snap.jsonlPath != nil, snap.updatedAt != nil else { return }
-        let id = snap.id
-        let cached = WorkClassifier.shared.classify(
-            snap: snap,
-            onUpdate: { [weak self] work in
-                self?.workStates[id] = work
-            }
-        )
-        if let cached = cached, workStates[id] != cached {
-            workStates[id] = cached
-        }
-    }
-
     var selectedSnapshot: SourceSnapshot? {
         guard let id = selectedID else { return nil }
         return snapshots.first { $0.id == id }
@@ -691,7 +664,6 @@ final class SessionModel: ObservableObject {
     func requestSummaryForSelection() {
         guard let snap = selectedSnapshot else { return }
         kickoffSummary(for: snap)
-        kickoffWorkClassification(for: snap)
     }
 
     @discardableResult
