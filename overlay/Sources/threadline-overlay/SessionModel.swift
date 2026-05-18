@@ -422,6 +422,8 @@ final class SessionModel: ObservableObject {
     /// Project folders the user collapsed in the agents sidebar. Absence means
     /// expanded; stored on the model so the 3-second refresh does not reset it.
     @Published var collapsedFolderIDs: Set<String> = []
+    /// When false, hide `Done` sessions so the sidebar is an action inbox.
+    @Published var showInactiveSessions = false
     private var timer: Timer?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
@@ -447,27 +449,28 @@ final class SessionModel: ObservableObject {
 
         let all = buildSnapshots()
         let folders = Self.makeFolders(from: all)
-        let firstID = all.first?.id
         let pollInterval = Self.preferredPollInterval(for: all)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, generation == self.refreshGeneration else { return }
-            self.applyRefresh(snapshots: all, folders: folders, firstID: firstID, pollInterval: pollInterval)
+            self.applyRefresh(snapshots: all, folders: folders, pollInterval: pollInterval)
         }
     }
 
     private func applyRefresh(snapshots all: [SourceSnapshot],
                               folders: [SessionFolder],
-                              firstID: String?,
                               pollInterval: TimeInterval) {
         if all != snapshots { self.snapshots = all }
         if folders != self.folders {
             self.folders = folders
             pruneCollapsedFolders(visible: folders.map(\.id))
         }
-        if selectedID == nil || selectedSnapshot == nil && selectedFolder == nil {
-            selectedID = firstID
-        }
+        let preferred = Self.preferredSelectionID(
+            snapshots: all,
+            workStates: workStates,
+            showInactive: showInactiveSessions
+        )
+        maintainSelection(preferredID: preferred)
         if pollInterval != currentPollInterval {
             currentPollInterval = pollInterval
             scheduleTimer(interval: pollInterval)
@@ -549,10 +552,72 @@ final class SessionModel: ObservableObject {
             return SessionFolder(cwd: cwd, snapshots: sorted, stats: SessionFolder.makeStats(from: sorted))
         }
         .sorted { a, b in
-            guard let la = a.latestSnapshot else { return false }
-            guard let lb = b.latestSnapshot else { return true }
-            return WorkStatusResolver.sort(la, lb)
+            WorkStatusResolver.folderSort(a, b, workStates: [:])
         }
+    }
+
+    func workState(for snap: SourceSnapshot) -> WorkState {
+        workStates[snap.id] ?? snap.workState
+    }
+
+    /// Folders and sessions for the sidebar trust board (respects `showInactiveSessions`).
+    var inboxFolders: [SessionFolder] {
+        let mapped: [SessionFolder] = folders.compactMap { folder in
+            let visible = folder.visibleSnapshots(
+                showInactive: showInactiveSessions,
+                workStates: workStates
+            )
+            guard !visible.isEmpty else { return nil }
+            var f = folder
+            f.snapshots = visible
+            f.stats = SessionFolder.makeStats(from: visible)
+            return f
+        }
+        return mapped.sorted { WorkStatusResolver.folderSort($0, $1, workStates: workStates) }
+    }
+
+    var inboxSnapshotCount: Int {
+        inboxFolders.reduce(0) { $0 + $1.snapshots.count }
+    }
+
+    private static func preferredSelectionID(snapshots: [SourceSnapshot],
+                                             workStates: [String: WorkState],
+                                             showInactive: Bool) -> String? {
+        let visible = showInactive
+            ? snapshots
+            : snapshots.filter {
+                !WorkStatusResolver.isInactiveInbox(workStates[$0.id] ?? $0.workState)
+            }
+        return visible.first?.id
+    }
+
+    private func maintainSelection(preferredID: String?) {
+        if let id = selectedID {
+            if selectedSnapshot != nil {
+                if !showInactiveSessions,
+                   let snap = selectedSnapshot,
+                   WorkStatusResolver.isInactiveInbox(workState(for: snap)) {
+                    selectedID = preferredID
+                }
+                return
+            }
+            if selectedFolder != nil,
+               inboxFolders.contains(where: { $0.selectionID == id }) {
+                return
+            }
+        }
+        selectedID = preferredID
+    }
+
+    func setShowInactiveSessions(_ value: Bool) {
+        guard showInactiveSessions != value else { return }
+        showInactiveSessions = value
+        let preferred = Self.preferredSelectionID(
+            snapshots: snapshots,
+            workStates: workStates,
+            showInactive: value
+        )
+        maintainSelection(preferredID: preferred)
     }
 
     private func normalizedCwd(_ cwd: String?) -> String {
@@ -608,7 +673,10 @@ final class SessionModel: ObservableObject {
     }
 
     var selectedFolder: SessionFolder? {
-        guard let id = selectedID else { return nil }
+        guard let id = selectedID, id.hasPrefix("folder:") else { return nil }
+        if let inbox = inboxFolders.first(where: { $0.selectionID == id }) {
+            return inbox
+        }
         return folders.first { $0.selectionID == id }
     }
 

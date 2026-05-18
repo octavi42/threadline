@@ -117,12 +117,33 @@ enum WorkStatusResolver {
         !isHelperNoise(snap)
     }
 
+    /// Sessions hidden from the default inbox (completed / informational).
+    static func isInactiveInbox(_ work: WorkState) -> Bool {
+        work.status == .done
+    }
+
     static func sort(_ a: SourceSnapshot, _ b: SourceSnapshot) -> Bool {
-        if a.workState.rank != b.workState.rank { return a.workState.rank < b.workState.rank }
+        sortByWork(a.workState, b.workState, a: a, b: b)
+    }
+
+    static func sortByWork(_ wa: WorkState, _ wb: WorkState,
+                           a: SourceSnapshot, b: SourceSnapshot) -> Bool {
+        if wa.rank != wb.rank { return wa.rank < wb.rank }
         let ad = a.updatedAt ?? .distantPast
         let bd = b.updatedAt ?? .distantPast
         if ad != bd { return ad > bd }
         return a.id < b.id
+    }
+
+    static func folderSort(_ a: SessionFolder, _ b: SessionFolder,
+                           workStates: [String: WorkState]) -> Bool {
+        let aw = a.trustSummary(workStates: workStates).worstRank
+        let bw = b.trustSummary(workStates: workStates).worstRank
+        if aw != bw { return aw < bw }
+        let ad = a.latestSnapshot?.updatedAt ?? .distantPast
+        let bd = b.latestSnapshot?.updatedAt ?? .distantPast
+        if ad != bd { return ad > bd }
+        return a.cwd < b.cwd
     }
 
     static func hasCodeChanges(_ snap: SourceSnapshot) -> Bool {
@@ -398,7 +419,49 @@ extension SourceSnapshot {
     }
 }
 
+/// Per-project counts for the trust board sidebar rollup.
+struct FolderTrustSummary: Equatable {
+    let counts: [WorkStatus: Int]
+    let worstRank: Int
+    let attentionCount: Int
+
+    /// Compact line, e.g. `1 Needs you · 2 Risky · 1 Ready`.
+    var rollupLine: String? {
+        let order: [WorkStatus] = [.needsYou, .testsFailed, .stuck, .risky, .ready, .working]
+        let parts = order.compactMap { status -> String? in
+            let count = counts[status] ?? 0
+            guard count > 0 else { return nil }
+            let label = status.rawValue
+            return count == 1 ? "1 \(label)" : "\(count) \(label)"
+        }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " · ")
+    }
+}
+
 extension SessionFolder {
+    func trustSummary(workStates: [String: WorkState]) -> FolderTrustSummary {
+        var counts: [WorkStatus: Int] = [:]
+        var worst = 99
+        var attention = 0
+        for snap in snapshots {
+            let work = workStates[snap.id] ?? snap.workState
+            counts[work.status, default: 0] += 1
+            worst = min(worst, work.rank)
+            if work.status != .done { attention += 1 }
+        }
+        if snapshots.isEmpty { worst = 99 }
+        return FolderTrustSummary(counts: counts, worstRank: worst, attentionCount: attention)
+    }
+
+    func visibleSnapshots(showInactive: Bool, workStates: [String: WorkState]) -> [SourceSnapshot] {
+        guard !showInactive else { return snapshots }
+        return snapshots.filter { snap in
+            let work = workStates[snap.id] ?? snap.workState
+            return !WorkStatusResolver.isInactiveInbox(work)
+        }
+    }
+
     static func makeStats(from snapshots: [SourceSnapshot]) -> FolderStats {
         var seenFiles: Set<String> = []
         for path in snapshots.flatMap(\.filesEdited) {

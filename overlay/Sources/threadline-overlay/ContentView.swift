@@ -90,14 +90,29 @@ private struct JumpButton: View {
 private struct AgentsList: View {
     @ObservedObject var model: SessionModel
 
+    private var inboxFolders: [SessionFolder] { model.inboxFolders }
+    private var hiddenDoneCount: Int {
+        model.snapshots.filter {
+            WorkStatusResolver.isInactiveInbox(model.workState(for: $0))
+        }.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("AGENTS")
+            HStack(spacing: 8) {
+                Text("INBOX")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("\(model.folders.count)/\(model.snapshots.count)")
+                if hiddenDoneCount > 0 {
+                    Button(model.showInactiveSessions ? "Hide done" : "Show \(hiddenDoneCount) done") {
+                        model.setShowInactiveSessions(!model.showInactiveSessions)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                }
+                Text("\(inboxFolders.count)/\(model.inboxSnapshotCount)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -113,18 +128,35 @@ private struct AgentsList: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+            } else if inboxFolders.isEmpty {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Text("all sessions quiet")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    if hiddenDoneCount > 0 {
+                        Button("Show \(hiddenDoneCount) done") {
+                            model.setShowInactiveSessions(true)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
             } else {
                 List(selection: Binding(
                     get: { model.selectedID },
                     set: { model.selectedID = $0 })) {
-                        ForEach(model.folders) { folder in
+                        ForEach(inboxFolders) { folder in
                             FolderSidebarRow(folder: folder, model: model)
                                 .tag(folder.selectionID)
                             if model.isFolderExpanded(folder.id) {
                                 ForEach(folder.snapshots) { snap in
                                     AgentRow(snap: snap,
                                              summary: model.summaries[snap.id],
-                                             workState: model.workStates[snap.id])
+                                             workState: model.workState(for: snap))
                                         .tag(snap.id)
                                 }
                             }
@@ -157,7 +189,7 @@ private struct FolderSidebarRow: View {
             .buttonStyle(.plain)
             .help(isExpanded ? "Collapse sessions" : "Expand sessions")
 
-            FolderHeader(folder: folder)
+            FolderHeader(folder: folder, model: model)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     model.selectedID = folder.selectionID
@@ -170,10 +202,18 @@ private struct FolderSidebarRow: View {
 
 private struct FolderHeader: View {
     let folder: SessionFolder
+    @ObservedObject var model: SessionModel
+
+    private var trust: FolderTrustSummary {
+        folder.trustSummary(workStates: model.workStates)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                Circle()
+                    .fill(workStatusColor(folderWorstStatus))
+                    .frame(width: 6, height: 6)
                 Text(folder.name)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .lineLimit(1)
@@ -182,6 +222,12 @@ private struct FolderHeader: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
             }
+            if let rollup = trust.rollupLine {
+                Text(rollup)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(workStatusColor(folderWorstStatus))
+                    .lineLimit(2)
+            }
             Text(folder.displayCwd)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.secondary)
@@ -189,6 +235,14 @@ private struct FolderHeader: View {
                 .truncationMode(.middle)
         }
         .padding(.vertical, 4)
+    }
+
+    private var folderWorstStatus: WorkStatus {
+        let order: [WorkStatus] = [.needsYou, .testsFailed, .stuck, .risky, .ready, .working, .done]
+        for status in order where (trust.counts[status] ?? 0) > 0 {
+            return status
+        }
+        return .done
     }
 }
 
@@ -219,6 +273,12 @@ private struct AgentRow: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if !work.nextAction.isEmpty {
+                    Text("→ \(work.nextAction)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(workStatusColor(work.status).opacity(0.9))
+                        .lineLimit(1)
+                }
                 if let s = secondaryLine {
                     Text(s)
                         .font(.system(size: 10))
@@ -308,8 +368,8 @@ private struct FolderDetailsPane: View {
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
+                    FolderTrustBoardView(model: model, folder: folder)
                     FolderStatsView(folder: folder)
-                    FolderSubagentsView(model: model, folder: folder)
                     FolderTasksView(folder: folder)
                     FolderFilesView(model: model, folder: folder)
                 }
@@ -338,6 +398,23 @@ private struct FolderDetailHeader: View {
             Text(folder.displayCwd)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(Color.secondary.opacity(0.7))
+        }
+    }
+}
+
+private struct FolderTrustBoardView: View {
+    @ObservedObject var model: SessionModel
+    let folder: SessionFolder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("TRUST BOARD")
+            if let rollup = folder.trustSummary(workStates: model.workStates).rollupLine {
+                Text(rollup)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
+            }
+            FolderSubagentsView(model: model, folder: folder)
         }
     }
 }
@@ -387,7 +464,7 @@ private struct FolderSubagentsView: View {
                     Button {
                         model.selectedID = snap.id
                     } label: {
-                        let work = model.workStates[snap.id] ?? snap.workState
+                        let work = model.workState(for: snap)
                         HStack(alignment: .top, spacing: 8) {
                             Circle()
                                 .fill(workStatusColor(work.status))

@@ -315,6 +315,42 @@ final class WorkStatusResolverTests: XCTestCase {
     }
 }
 
+final class FolderTrustSummaryTests: XCTestCase {
+    func testRollupLineOrdersByUrgency() {
+        let folder = SessionFolder(
+            cwd: "/tmp/project",
+            snapshots: [
+                snap(id: "a", status: .ready),
+                snap(id: "b", status: .risky),
+                snap(id: "c", status: .needsYou),
+            ]
+        )
+        let summary = folder.trustSummary(workStates: [:])
+        XCTAssertEqual(summary.rollupLine, "1 Needs you · 1 Risky · 1 Ready")
+        XCTAssertEqual(summary.attentionCount, 3)
+    }
+
+    func testVisibleSnapshotsHidesDoneByDefault() {
+        let folder = SessionFolder(
+            cwd: "/tmp/project",
+            snapshots: [
+                snap(id: "a", status: .ready),
+                snap(id: "b", status: .done),
+            ]
+        )
+        let visible = folder.visibleSnapshots(showInactive: false, workStates: [:])
+        XCTAssertEqual(visible.map(\.id), ["a"])
+        let all = folder.visibleSnapshots(showInactive: true, workStates: [:])
+        XCTAssertEqual(all.count, 2)
+    }
+
+    private func snap(id: String, status: WorkStatus) -> SourceSnapshot {
+        var s = SourceSnapshot(id: id, tool: "Claude", badge: "CLD")
+        s.workState = WorkState(status: status, reason: "", nextAction: "", rank: 0)
+        return s
+    }
+}
+
 // MARK: - helpers
 
 private func fixture(_ name: String) throws -> String {
