@@ -315,6 +315,55 @@ final class WorkStatusResolverTests: XCTestCase {
     }
 }
 
+final class StuckLoopDetectorTests: XCTestCase {
+    func testDetectsRepeatedErrorsInPlainText() {
+        let text = """
+        error: cannot find 'Foo' in scope
+        error: cannot find 'Foo' in scope
+        error: cannot find 'Foo' in scope
+        error: cannot find 'Foo' in scope
+        """
+        let result = StuckLoopDetector.analyze(text: text)
+        XCTAssertEqual(result?.repeatCount, 4)
+        XCTAssertEqual(StuckLoopDetector.reason(for: result!), "same error repeated 4×")
+    }
+
+    func testTwoRepeatsIsNotStuck() {
+        let text = """
+        error: build failed
+        error: build failed
+        """
+        XCTAssertNil(StuckLoopDetector.analyze(text: text))
+    }
+
+    func testFingerprintIgnoresPathAndLineNumbers() {
+        let a = StuckLoopDetector.fingerprint("error: cannot find 'Foo' in /Users/a/proj/x.swift:12:5")
+        let b = StuckLoopDetector.fingerprint("error: cannot find 'Foo' in /tmp/other/y.swift:99:1")
+        XCTAssertEqual(a, b)
+    }
+
+    func testFixtureJSONLDetectsStuckLoop() throws {
+        let path = try fixture("claude_stuck_loop.jsonl")
+        let result = StuckLoopDetector.analyze(jsonlPath: path)
+        XCTAssertEqual(result?.repeatCount, 4)
+    }
+
+    func testResolverMarksStuckWithRepeatCount() throws {
+        let path = try fixture("claude_stuck_loop.jsonl")
+        var snap = SourceSnapshot(id: "stuck", tool: "Claude", badge: "CLD")
+        snap.state = .running
+        snap.jsonlPath = path
+        snap.livePid = 42
+        snap.updatedAt = Date()
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .stuck)
+        XCTAssertEqual(work.reason, "same error repeated 4×")
+        XCTAssertEqual(work.nextAction, "Jump back")
+    }
+}
+
 final class FileConflictDetectorTests: XCTestCase {
     func testDetectsReadyVsRiskyOnSameFile() {
         let folder = conflictFixture(

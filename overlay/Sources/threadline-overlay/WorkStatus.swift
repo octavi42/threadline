@@ -346,9 +346,17 @@ enum WorkStatusResolver {
     }
 
     private static func isStuck(_ snap: SourceSnapshot, text: String) -> Bool {
+        if stuckLoop(from: snap, text: text) != nil { return true }
         if hasRetryLoopSignal(text) { return true }
         if snap.state == .stale && snap.tasksInProgress > 0 { return true }
         return false
+    }
+
+    private static func stuckLoop(from snap: SourceSnapshot, text: String) -> StuckLoopDetector.Result? {
+        if let path = snap.jsonlPath, let loop = StuckLoopDetector.analyze(jsonlPath: path) {
+            return loop
+        }
+        return StuckLoopDetector.analyze(text: text)
     }
 
     private static func hasRetryLoopSignal(_ text: String) -> Bool {
@@ -364,6 +372,9 @@ enum WorkStatusResolver {
     }
 
     private static func stuckReason(_ snap: SourceSnapshot, text: String) -> String {
+        if let loop = stuckLoop(from: snap, text: text) {
+            return StuckLoopDetector.reason(for: loop)
+        }
         if text.contains("same error") || hasRetryLoopSignal(text) {
             return "same error repeated"
         }

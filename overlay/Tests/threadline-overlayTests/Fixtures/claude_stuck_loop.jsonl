@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-05-14T10:00:00.000Z","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"text","text":"fix the build"}]}}
+{"type":"user","timestamp":"2026-05-14T10:00:05.000Z","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"error: cannot find 'Foo' in scope\nfile: /Users/test/proj/a.swift:12:5"}]}}
+{"type":"user","timestamp":"2026-05-14T10:00:10.000Z","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"error: cannot find 'Foo' in scope\nfile: /Users/test/proj/b.swift:14:2"}]}}
+{"type":"user","timestamp":"2026-05-14T10:00:15.000Z","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"error: cannot find 'Foo' in scope\nfile: /Users/test/proj/c.swift:9:1"}]}}
+{"type":"user","timestamp":"2026-05-14T10:00:20.000Z","cwd":"/Users/test/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"error: cannot find 'Foo' in scope\nfile: /Users/test/proj/d.swift:3:8"}]}}
