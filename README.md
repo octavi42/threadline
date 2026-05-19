@@ -128,7 +128,6 @@ The overlay is a single Swift binary: a long-lived **daemon** (window + polling)
 | Doc | Description |
 |-----|-------------|
 | [overlay/README.md](overlay/README.md) | Install details, CLI, shell hooks, optional Ollama |
-| [docs/](docs/) | Product direction and design notes |
 
 ## Repository layout
 
@@ -138,7 +137,6 @@ threadline/
 │   ├── install.sh
 │   ├── Sources/
 │   └── Tests/
-└── docs/             # vision and design (not required to run the app)
 ```
 
 ## Contributing
@@ -152,6 +150,8 @@ swift test
 ```
 
 CI runs on every push to `main` (`swift build` + `swift test` in `overlay/`). Open an [issue](https://github.com/octavi42/threadline/issues) for bugs and ideas.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, pull request expectations, and bug report guidance. Please report suspected vulnerabilities privately using [SECURITY.md](SECURITY.md).
 
 ## License
 

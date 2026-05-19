@@ -17,6 +17,9 @@ overlay/Package.resolved
 .cursor/plans/
 .cursor/projects/
 
+# Personal product notes / launch materials
+docs/*.md
+
 # macOS / IDE
 *.swp
 *~

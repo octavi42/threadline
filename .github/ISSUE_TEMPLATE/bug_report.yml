@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible problem in Threadline.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please redact private prompts, local paths, tokens, and session content before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Threadline version
+      description: Release version or commit SHA.
+      placeholder: v0.1.0 or 3d203b9
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and architecture
+      placeholder: macOS 14.5, Apple Silicon
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Agent/source
+      options:
+        - Claude Code
+        - Codex CLI
+        - Cursor
+        - Shell hook
+        - Installer
+        - Overlay UI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do?
+      placeholder: |
+        1. Install Threadline with ...
+        2. Run ...
+        3. Press ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Optional. Redact private data before posting.
