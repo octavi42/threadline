@@ -17,8 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/octavi42/threadline/main/overlay/in
 
 ## Demo
 
-<!-- After you record: add docs/demo.gif or docs/demo.png and uncomment the line below -->
-<!-- ![Threadline inbox showing trust statuses and cross-agent conflicts](docs/demo.gif) -->
+![Threadline inbox showing trust statuses and cross-agent conflicts](docs/demo.gif)
 
 ```
 ┌─ INBOX ──────────────────────────────────────────────────────┐
