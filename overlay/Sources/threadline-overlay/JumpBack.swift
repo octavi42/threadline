@@ -21,16 +21,36 @@ enum JumpBack {
             guard let cwd = snapshot.cwd, !cwd.isEmpty else { return false }
             return cursorIsInstalled()
         }
-        return app(for: snapshot) != nil
+        guard let app = app(for: snapshot),
+              let bundleID = snapshot.terminalBundleID ?? app.bundleIdentifier
+        else { return false }
+        return hasTerminalRoute(bundleID: bundleID, snapshot: snapshot)
     }
 
     static func jumpLabel(for snapshot: SourceSnapshot) -> String {
         if snapshot.tool == "Cursor" { return "Open Cursor workspace" }
-        if let tty = snapshot.tty, !tty.isEmpty { return "Open terminal tab" }
-        if let surfaceID = snapshot.terminalSurfaceID, !surfaceID.isEmpty {
-            return "Open terminal"
+        if let bundleID = snapshot.terminalBundleID {
+            switch bundleID {
+            case "com.mitchellh.ghostty":
+                if let surfaceID = snapshot.terminalSurfaceID, !surfaceID.isEmpty {
+                    return "Open Ghostty terminal"
+                }
+                if let cwd = snapshot.cwd, !cwd.isEmpty {
+                    return "Open Ghostty terminal if project path is unique"
+                }
+                return "No Ghostty terminal identity yet"
+            case "com.apple.Terminal",
+                 "com.googlecode.iterm2",
+                 "com.googlecode.iterm2.beta":
+                if let tty = snapshot.tty, !tty.isEmpty {
+                    return "Open terminal tab"
+                }
+                return "No exact terminal TTY yet"
+            default:
+                return "Exact jump is not supported for this terminal"
+            }
         }
-        return "Open terminal or editor"
+        return "No terminal identity yet"
     }
 
     static func jump(to snapshot: SourceSnapshot?) -> Result? {
@@ -43,11 +63,14 @@ enum JumpBack {
         guard let app = app(for: snapshot)
         else { return nil }
 
-        let focus = focusExactTabIfPossible(bundleID: snapshot.terminalBundleID ?? app.bundleIdentifier,
+        let bundleID = snapshot.terminalBundleID ?? app.bundleIdentifier
+        guard hasTerminalRoute(bundleID: bundleID, snapshot: snapshot) else { return nil }
+
+        let focus = focusExactTabIfPossible(bundleID: bundleID,
                                             tty: snapshot.tty,
                                             cwd: snapshot.cwd,
+                                            titleHint: ghosttyTitleHint(for: snapshot),
                                             surfaceID: snapshot.terminalSurfaceID)
-        app.activate(options: [.activateIgnoringOtherApps])
         let route = [
             "pid=\(snapshot.livePid.map(String.init) ?? "-")",
             "bundle=\(snapshot.terminalBundleID ?? app.bundleIdentifier ?? "-")",
@@ -55,9 +78,41 @@ enum JumpBack {
             "surface=\(snapshot.terminalSurfaceID ?? "-")",
             "cwd=\(snapshot.cwd ?? "-")",
         ].joined(separator: " ")
+        guard focus.exact else {
+            return Result(appName: app.localizedName ?? app.bundleIdentifier ?? "app",
+                          exactTab: false,
+                          detail: "\(focus.detail) \(route)")
+        }
+        app.activate(options: [.activateIgnoringOtherApps])
         return Result(appName: app.localizedName ?? app.bundleIdentifier ?? "app",
                       exactTab: focus.exact,
                       detail: "\(focus.detail) \(route)")
+    }
+
+    private static func hasTerminalRoute(bundleID: String?,
+                                         snapshot: SourceSnapshot) -> Bool {
+        guard let bundleID = bundleID else { return false }
+        switch bundleID {
+        case "com.apple.Terminal",
+             "com.googlecode.iterm2",
+             "com.googlecode.iterm2.beta":
+            return !(snapshot.tty ?? "").isEmpty
+        case "com.mitchellh.ghostty":
+            return !(snapshot.terminalSurfaceID ?? "").isEmpty || !(snapshot.cwd ?? "").isEmpty
+        default:
+            return false
+        }
+    }
+
+    private static func ghosttyTitleHint(for snapshot: SourceSnapshot) -> String? {
+        guard snapshot.terminalBundleID == "com.mitchellh.ghostty" else { return nil }
+        let raw = snapshot.currentTask
+            ?? snapshot.jsonlPath.flatMap(Summarizer.extractOpeningGoal)
+            ?? snapshot.lastText
+        guard let raw = raw else { return nil }
+        let compact = SourceSnapshot.compactLine(raw, limit: 80, maxWords: 12, firstSentence: false)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return compact.isEmpty || compact == "—" ? nil : compact
     }
 
     private static func app(for snapshot: SourceSnapshot) -> NSRunningApplication? {
@@ -105,13 +160,13 @@ enum JumpBack {
         if let app = runningCursorApp() {
             app.activate(options: [.activateIgnoringOtherApps])
             return Result(appName: app.localizedName ?? "Cursor",
-                          exactTab: false,
+                          exactTab: true,
                           detail: "app")
         }
         guard let cwd = cwd else { return nil }
         for bundleID in cursorBundleIDs {
             if openWorkspace(cwd: cwd, bundleID: bundleID) {
-                return Result(appName: "Cursor", exactTab: false, detail: "workspace")
+                return Result(appName: "Cursor", exactTab: true, detail: "workspace")
             }
         }
         return nil
@@ -136,6 +191,7 @@ enum JumpBack {
     private static func focusExactTabIfPossible(bundleID: String?,
                                                 tty: String?,
                                                 cwd: String?,
+                                                titleHint: String?,
                                                 surfaceID: String?) -> (exact: Bool, detail: String) {
         guard let bundleID = bundleID,
               !bundleID.isEmpty
@@ -156,10 +212,15 @@ enum JumpBack {
                runAppleScript(ghosttySurfaceScript(surfaceID: surfaceID)) {
                 return (true, "surface-id")
             }
-            guard let cwd = cwd, !cwd.isEmpty else { return (false, "app") }
-            return runAppleScript(ghosttyCwdScript(cwd: (cwd as NSString).standardizingPath))
-                ? (true, "cwd")
-                : (false, "app")
+            guard let cwd = cwd, !cwd.isEmpty else { return (false, "missing-surface-id") }
+            if let titleHint = titleHint, !titleHint.isEmpty,
+               runAppleScript(ghosttyTitleAndCwdScript(cwd: (cwd as NSString).standardizingPath,
+                                                       titleHint: titleHint)) {
+                return (true, "title+cwd")
+            }
+            return runAppleScript(ghosttyUniqueCwdScript(cwd: (cwd as NSString).standardizingPath))
+                ? (true, "unique-cwd")
+                : (false, "ambiguous-or-missing-cwd")
         default:
             return (false, "app")
         }
@@ -222,17 +283,42 @@ enum JumpBack {
         """
     }
 
-    private static func ghosttyCwdScript(cwd: String) -> String {
+    private static func ghosttyUniqueCwdScript(cwd: String) -> String {
         let cwd = appleScriptString(cwd)
         return """
         tell application "Ghostty"
+            set matches to {}
             repeat with term in terminals
                 if working directory of term is "\(cwd)" then
-                    focus term
-                    activate
-                    return "ok"
+                    set end of matches to term
                 end if
             end repeat
+            if (count of matches) is 1 then
+                focus item 1 of matches
+                activate
+                return "ok"
+            end if
+        end tell
+        return "not found"
+        """
+    }
+
+    private static func ghosttyTitleAndCwdScript(cwd: String, titleHint: String) -> String {
+        let cwd = appleScriptString(cwd)
+        let titleHint = appleScriptString(titleHint)
+        return """
+        tell application "Ghostty"
+            set matches to {}
+            repeat with term in terminals
+                if working directory of term is "\(cwd)" and name of term contains "\(titleHint)" then
+                    set end of matches to term
+                end if
+            end repeat
+            if (count of matches) is 1 then
+                focus item 1 of matches
+                activate
+                return "ok"
+            end if
         end tell
         return "not found"
         """

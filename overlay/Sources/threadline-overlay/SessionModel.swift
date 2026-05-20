@@ -244,6 +244,9 @@ final class SessionModel: ObservableObject {
         guard let snap = snap else {
             return allowFolderFallback ? selectFolder(cwd: scope.cwd) : false
         }
+        mergeTerminalIdentity(snapshotID: snap.id,
+                              tty: scope.tty,
+                              terminal: scope.terminal)
         selectedID = snap.id
         return true
     }
@@ -266,8 +269,34 @@ final class SessionModel: ObservableObject {
         guard let snap = snap else {
             return false
         }
+        mergeTerminalIdentity(snapshotID: snap.id,
+                              tty: terminal.tty,
+                              terminal: terminal)
         selectedID = snap.id
         return true
+    }
+
+    private func mergeTerminalIdentity(snapshotID: String,
+                                       tty: String?,
+                                       terminal: TerminalIdentity?) {
+        guard let index = snapshots.firstIndex(where: { $0.id == snapshotID }) else { return }
+        var snap = snapshots[index]
+        if let normalizedTTY = TerminalIdentityResolver.normalizeTTY(tty), snap.tty == nil {
+            snap.tty = normalizedTTY
+        }
+        if let terminal = terminal {
+            snap.terminalBundleID = terminal.bundleID
+            snap.terminalPID = terminal.appPID
+            if let surfaceID = terminal.surfaceID { snap.terminalSurfaceID = surfaceID }
+            if let windowID = terminal.windowID { snap.terminalWindowID = windowID }
+            if let tabID = terminal.tabID { snap.terminalTabID = tabID }
+            if let terminalTTY = TerminalIdentityResolver.normalizeTTY(terminal.tty), snap.tty == nil {
+                snap.tty = terminalTTY
+            }
+        }
+        guard snap != snapshots[index] else { return }
+        snapshots[index] = snap
+        folders = SessionGrouper.makeFolders(from: snapshots)
     }
 
     func isFolderExpanded(_ folderID: String) -> Bool {

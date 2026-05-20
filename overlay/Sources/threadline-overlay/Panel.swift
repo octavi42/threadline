@@ -106,6 +106,12 @@ final class OverlayController {
     func jump(to snapshot: SourceSnapshot, hidePanel: Bool = true) -> Bool {
         guard let result = JumpBack.jump(to: snapshot) else {
             NSSound.beep()
+            FileHandle.standardError.write(Data("jump failed: no exact terminal route\n".utf8))
+            return false
+        }
+        guard result.exactTab else {
+            NSSound.beep()
+            FileHandle.standardError.write(Data("jump failed via \(result.detail)\n".utf8))
             return false
         }
         if hidePanel {
@@ -133,6 +139,10 @@ final class OverlayController {
         guard let result = JumpBack.jump(to: snap) else {
             NSSound.beep()
             return "no jump target"
+        }
+        guard result.exactTab else {
+            NSSound.beep()
+            return "jump failed via \(result.detail)"
         }
         persistFrame()
         panel.orderOut(nil)
