@@ -23,7 +23,11 @@ final class SessionModel: ObservableObject {
     @Published var showCursorHistorySessions = false
     /// Cursor sessions on disk hidden while `showCursorHistorySessions` is false.
     @Published private(set) var hiddenCursorHistoryCount = 0
+    /// Advances every second while live agents exist so relative timestamps stay fresh.
+    @Published private(set) var liveClock = Date()
     private var timer: Timer?
+    private var liveClockTimer: Timer?
+    private var logWatcher: SessionLogWatcher?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
     private var currentPollInterval: TimeInterval = 3.0
@@ -34,6 +38,16 @@ final class SessionModel: ObservableObject {
     func start() {
         refresh()
         scheduleTimer(interval: 3.0)
+        logWatcher = SessionLogWatcher { [weak self] in
+            self?.refresh()
+        }
+        logWatcher?.start()
+    }
+
+    deinit {
+        timer?.invalidate()
+        liveClockTimer?.invalidate()
+        logWatcher?.stop()
     }
 
     func refresh() {
@@ -84,6 +98,7 @@ final class SessionModel: ObservableObject {
             currentPollInterval = pollInterval
             scheduleTimer(interval: pollInterval)
         }
+        updateLiveClockTimer(hasLiveAgents: all.contains { $0.livePid != nil })
         WorkStatusResolver.pruneResolveCache(keeping: Set(all.map(\.id)))
         if let snap = selectedSnapshot {
             kickoffSummary(for: snap)
@@ -94,6 +109,19 @@ final class SessionModel: ObservableObject {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refresh()
+        }
+    }
+
+    private func updateLiveClockTimer(hasLiveAgents: Bool) {
+        if hasLiveAgents {
+            guard liveClockTimer == nil else { return }
+            liveClock = Date()
+            liveClockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.liveClock = Date()
+            }
+        } else {
+            liveClockTimer?.invalidate()
+            liveClockTimer = nil
         }
     }
 

@@ -188,7 +188,8 @@ private struct AgentsList: View {
                             if model.isFolderExpanded(folder.id) {
                                 ForEach(Array(folder.snapshots.enumerated()), id: \.element.id) { index, snap in
                                     AgentRow(snap: snap,
-                                             workState: model.workState(for: snap))
+                                             workState: model.workState(for: snap),
+                                             now: model.liveClock)
                                         .padding(.leading, 12)
                                         .padding(.top, index == 0 ? 6 : 2)
                                         .padding(.bottom, index == folder.snapshots.count - 1 ? 10 : 0)
@@ -289,6 +290,8 @@ private func inboxNextAction(_ work: WorkState) -> String? {
 private struct AgentRow: View {
     let snap: SourceSnapshot
     let workState: WorkState?
+    let now: Date
+
     var body: some View {
         let work = workState ?? snap.workState
         HStack(alignment: .top, spacing: 6) {
@@ -309,6 +312,13 @@ private struct AgentRow: View {
                         .foregroundColor(workStatusColor(work.status))
                         .lineLimit(1)
                 }
+                if snap.activityLine != "—" {
+                    Text(snap.activityLine)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .help(snap.activityLine)
+                }
                 if let action = inboxNextAction(work) {
                     Text("→ \(action)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -317,7 +327,7 @@ private struct AgentRow: View {
                 }
             }
             Spacer(minLength: 4)
-            Text(snap.timeAgoShort)
+            Text(snap.timeAgoShort(relativeTo: now))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.secondary)
                 .padding(.top, 2)
@@ -336,7 +346,7 @@ private struct DetailsPane: View {
     var body: some View {
         if let snap = model.selectedSnapshot {
             VStack(alignment: .leading, spacing: 0) {
-                DetailHeader(snap: snap, onJump: onJump)
+                DetailHeader(snap: snap, now: model.liveClock, onJump: onJump)
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
                     .padding(.bottom, 10)
@@ -786,6 +796,7 @@ private struct FolderProjectFileExpanded: View {
 
 private struct DetailHeader: View {
     let snap: SourceSnapshot
+    let now: Date
     let onJump: (SourceSnapshot) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -798,7 +809,7 @@ private struct DetailHeader: View {
                 Spacer()
                 JumpButton(snap: snap, onJump: onJump)
                     .layoutPriority(1)
-                Text(snap.timeAgoShort)
+                Text(snap.timeAgoShort(relativeTo: now))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.secondary)
             }

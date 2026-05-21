@@ -132,11 +132,16 @@ enum WorkStatusResolver {
                              rank: 7)
         }
 
-        if kind == .research, !codeChanged, isActivelyWorking(snap) || snap.state == .running {
-            let reason = researchReason(snap)
+        if isActivelyWorking(snap) {
+            let reason = kind == .research && !codeChanged
+                ? researchReason(snap)
+                : workingReason(snap)
+            let next = kind == .research && !codeChanged
+                ? "Synthesize findings"
+                : workingNextAction(snap, kind: kind)
             return WorkState(status: .working,
                              reason: reason,
-                             nextAction: "Synthesize findings",
+                             nextAction: next,
                              rank: 5)
         }
 
@@ -154,13 +159,6 @@ enum WorkStatusResolver {
                              reason: changeSummary(snap, suffix: "no test evidence"),
                              nextAction: next,
                              rank: 3)
-        }
-
-        if isActivelyWorking(snap) {
-            return WorkState(status: .working,
-                             reason: workingReason(snap),
-                             nextAction: workingNextAction(snap, kind: kind),
-                             rank: 5)
         }
 
         if snap.state == .stale {
@@ -245,11 +243,13 @@ enum WorkStatusResolver {
         return false
     }
 
+    /// How long a live agent can go without JSONL writes and still count as active.
+    static let liveActivityWindow: TimeInterval = 120
+
     static func isActivelyWorking(_ snap: SourceSnapshot, now: Date = Date()) -> Bool {
         if snap.state == .running { return true }
         guard snap.livePid != nil, let updatedAt = snap.updatedAt else { return false }
-        // Live CLI process but idle: only "working" if the log changed very recently.
-        return now.timeIntervalSince(updatedAt) < 30
+        return now.timeIntervalSince(updatedAt) < liveActivityWindow
     }
 
     // MARK: - evidence

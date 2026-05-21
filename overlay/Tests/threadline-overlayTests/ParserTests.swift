@@ -317,6 +317,30 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.status, .done)
     }
 
+    func testActivelyWorkingWithCodeChangesShowsWorkingNotRisky() {
+        var snap = baseSnapshot(state: .running)
+        snap.livePid = 42
+        snap.filesEdited = ["/tmp/A.swift"]
+        snap.lastTool = "Edit SessionModel.swift"
+        snap.updatedAt = Date()
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .working)
+        XCTAssertEqual(work.reason, "Edit SessionModel.swift")
+    }
+
+    func testIdleSessionWithPassedTestsRemainsReady() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/A.swift"]
+        snap.lastText = "swift test passed"
+        snap.updatedAt = Date().addingTimeInterval(-600)
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .ready)
+    }
+
     func testStatusWordsAloneDoNotCreateFailedTests() {
         var snap = baseSnapshot(state: .idle)
         snap.lastText = "We discussed labels like Tests failed and Risky."

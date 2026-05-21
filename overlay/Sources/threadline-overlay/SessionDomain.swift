@@ -225,8 +225,12 @@ struct SourceSnapshot: Identifiable, Equatable {
     }
 
     var timeAgoShort: String {
+        timeAgoShort(relativeTo: Date())
+    }
+
+    func timeAgoShort(relativeTo now: Date) -> String {
         guard let t = updatedAt else { return "—" }
-        let s = Int(-t.timeIntervalSinceNow)
+        let s = max(0, Int(now.timeIntervalSince(t)))
         if s < 5            { return "now" }
         if s < 60           { return "\(s)s" }
         if s < 3600         { return "\(s / 60)m" }
