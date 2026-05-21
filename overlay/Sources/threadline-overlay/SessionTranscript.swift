@@ -28,10 +28,24 @@ struct SessionTranscript: Equatable {
     }
 
     var openingGoal: String? {
+        Self.firstSubstantiveUserText(in: snippets)
+    }
+
+    /// Latest substantive user message — best proxy for "current ask".
+    var latestUserAsk: String? {
+        Self.lastSubstantiveUserText(in: snippets)
+    }
+
+    static func firstSubstantiveUserText(in snippets: [Snippet]) -> String? {
         for snippet in snippets where snippet.role == "user" {
-            if let goal = Self.substantiveUserText(snippet.text) {
-                return goal
-            }
+            if let goal = substantiveUserText(snippet.text) { return goal }
+        }
+        return nil
+    }
+
+    static func lastSubstantiveUserText(in snippets: [Snippet]) -> String? {
+        for snippet in snippets.reversed() where snippet.role == "user" {
+            if let goal = substantiveUserText(snippet.text) { return goal }
         }
         return nil
     }
@@ -77,15 +91,57 @@ enum SessionTranscriptCache {
         let path: String
         let mtime: Date
         let maxBytes: Int?
+        let activeOnly: Bool
     }
 
     private static let lock = NSLock()
     private static var memory: [CacheKey: SessionTranscript] = [:]
 
     static func transcript(fromJSONL path: String, maxBytes: Int? = nil) -> SessionTranscript? {
+        parseStored(path: path, maxBytes: maxBytes, activeOnly: false)
+    }
+
+    /// Transcript for the active segment (post-`/clear` / post-compact).
+    static func activeTranscript(fromJSONL path: String, maxBytes: Int? = nil) -> SessionTranscript? {
+        parseStored(path: path, maxBytes: maxBytes, activeOnly: true)
+    }
+
+    static func activeOpeningGoal(fromJSONL path: String) -> String? {
+        activeTranscript(fromJSONL: path)?.openingGoal
+    }
+
+    static func activeLatestUserAsk(fromJSONL path: String) -> String? {
+        activeTranscript(fromJSONL: path)?.latestUserAsk
+    }
+
+    /// User messages + tool outputs only — excludes tool inputs (Grep patterns, shell cmds).
+    static func activeUserAndToolEvidence(fromJSONL path: String, maxBytes: Int? = 96 * 1024) -> String? {
+        guard let transcript = activeTranscript(fromJSONL: path, maxBytes: maxBytes) else { return nil }
+        let userText = transcript.snippets
+            .filter { $0.role == "user" }
+            .map(\.text)
+            .joined(separator: "\n")
+        let parts = [userText] + transcript.relevantOutputs
+        let joined = parts.filter { !$0.isEmpty }.joined(separator: "\n")
+        return joined.isEmpty ? nil : joined.lowercased()
+    }
+
+    /// User + tool inputs + outputs — for summaries and activity traces.
+    static func activeToolTraceEvidence(fromJSONL path: String, maxBytes: Int? = 96 * 1024) -> String? {
+        guard let transcript = activeTranscript(fromJSONL: path, maxBytes: maxBytes) else { return nil }
+        let userText = transcript.snippets
+            .filter { $0.role == "user" }
+            .map(\.text)
+            .joined(separator: "\n")
+        let parts = [userText] + transcript.relevantOutputs + transcript.toolLines
+        let joined = parts.filter { !$0.isEmpty }.joined(separator: "\n")
+        return joined.isEmpty ? nil : joined.lowercased()
+    }
+
+    private static func parseStored(path: String, maxBytes: Int?, activeOnly: Bool) -> SessionTranscript? {
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date)
             ?? .distantPast
-        let key = CacheKey(path: path, mtime: mtime, maxBytes: maxBytes)
+        let key = CacheKey(path: path, mtime: mtime, maxBytes: maxBytes, activeOnly: activeOnly)
 
         lock.lock()
         if let hit = memory[key] {
@@ -95,7 +151,9 @@ enum SessionTranscriptCache {
         lock.unlock()
 
         let text: String?
-        if let maxBytes = maxBytes {
+        if activeOnly {
+            text = SessionSegment.activeText(from: path)
+        } else if let maxBytes = maxBytes {
             text = tailOfFile(path: path, maxBytes: maxBytes)
         } else {
             text = try? String(contentsOfFile: path, encoding: .utf8)
@@ -105,10 +163,10 @@ enum SessionTranscriptCache {
         let parsed = parse(text)
         lock.lock()
         memory[key] = parsed
-        if memory.count > 64 {
+        if memory.count > 96 {
             let staleKeys = memory.keys
                 .sorted { $0.mtime < $1.mtime }
-                .prefix(memory.count - 48)
+                .prefix(memory.count - 64)
             staleKeys.forEach { memory.removeValue(forKey: $0) }
         }
         lock.unlock()
@@ -160,6 +218,11 @@ enum SessionTranscriptCache {
             case "tool_use":
                 if let line = cursorToolUseLine(block) {
                     out.toolLines.append(line)
+                }
+            case "tool_result":
+                if let body = extractToolResultText(block["content"]),
+                   outputIsRelevant(body) {
+                    out.relevantOutputs.append(body)
                 }
             default:
                 break

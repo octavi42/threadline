@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nwhy is status wrong?\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"| Waiting for approval / usage limit | Needs you | Approve |"},{"type":"tool_use","name":"Read","input":{"path":"/Users/test/proj/README.md"}}]}}

@@ -73,7 +73,11 @@ enum CursorAgentSource {
     // MARK: - snapshot
 
     private static func snapshot(jsonlPath: String, mtime: Date) -> SourceSnapshot? {
-        guard let tail = tailOfFile(path: jsonlPath, maxBytes: 128 * 1024) else { return nil }
+        guard let active = SessionSegment.activeText(from: jsonlPath) ?? tailOfFile(path: jsonlPath, maxBytes: 128 * 1024)
+        else { return nil }
+        let tail = active.utf8.count > 128 * 1024
+            ? String(active.suffix(128 * 1024))
+            : active
         let cwd: String?
         if jsonlPath.contains("/.cursor/projects/") {
             guard let ws = workspacePath(forJSONL: jsonlPath),
@@ -131,7 +135,7 @@ enum CursorAgentSource {
                     lastToolName = name
                     lastToolInput = input
                     toolCounts[name, default: 0] += 1
-                    if let path = filePath(from: input), !filesEditedSeen.contains(path) {
+                    if isEditTool(name), let path = filePath(from: input), !filesEditedSeen.contains(path) {
                         filesEditedSeen.insert(path)
                         filesEditedOrder.append(path)
                     }
@@ -151,6 +155,8 @@ enum CursorAgentSource {
             snap.lastTool = describe(tool: name, input: lastToolInput)
         }
         snap.lastText = lastAssistantText ?? lastUserText
+        snap.currentTask = SessionTranscriptCache.activeLatestUserAsk(fromJSONL: jsonlPath)
+            ?? SessionTranscriptCache.activeOpeningGoal(fromJSONL: jsonlPath)
         snap.userTurns = userTurns
         snap.assistantTurns = assistantTurns
         snap.filesEdited = filesEditedOrder
@@ -341,6 +347,15 @@ enum CursorAgentSource {
     }
 
     // MARK: - helpers
+
+    private static func isEditTool(_ name: String) -> Bool {
+        switch name {
+        case "StrReplace", "Edit", "MultiEdit", "Write", "apply_patch":
+            return true
+        default:
+            return false
+        }
+    }
 
     private static func modificationDate(path: String) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date

@@ -143,9 +143,19 @@ final class CursorAgentSourceTests: XCTestCase {
 }
 
 final class SummarizerPolicyTests: XCTestCase {
-    func testCursorSessionsSkipLLMSummary() throws {
+    func testCursorSessionsSummarizeWhenToolTraceExists() throws {
         let path = try fixture("cursor_agent_simple.jsonl")
-        XCTAssertFalse(Summarizer.shouldSummarize(tool: "Cursor", jsonlPath: path))
+        XCTAssertTrue(Summarizer.shouldSummarize(tool: "Cursor", jsonlPath: path))
+    }
+
+    func testCursorResearchFixtureUsesStructuredBrief() throws {
+        let path = try fixture("cursor_research.jsonl")
+        guard let snap = CursorAgentSource.snapshot(forJSONL: path) else {
+            XCTFail("expected snapshot")
+            return
+        }
+        let brief = SessionModel.deterministicBrief(for: snap)
+        XCTAssertTrue(brief?.contains("research") == true || brief?.contains("competitor") == true)
     }
 
     func testDeterministicBriefForCursor() throws {
@@ -185,6 +195,13 @@ final class SessionTranscriptTests: XCTestCase {
 
         XCTAssertEqual(transcript.openingGoal, "add logout route")
         XCTAssertTrue(transcript.summaryText?.contains("tool: StrReplace auth.swift") == true)
+    }
+
+    func testActiveSegmentStartsAfterClear() throws {
+        let path = try fixture("cursor_after_clear.jsonl")
+        let active = try XCTUnwrap(SessionTranscriptCache.activeTranscript(fromJSONL: path))
+        XCTAssertEqual(active.openingGoal, "implement session segment boundaries")
+        XCTAssertFalse(active.openingGoal?.contains("auth refactor") == true)
     }
 }
 
@@ -232,6 +249,40 @@ final class WorkStatusResolverTests: XCTestCase {
 
         XCTAssertEqual(work.status, .done)
         XCTAssertEqual(work.reason, "answer complete")
+    }
+
+    func testCursorResearchFixtureIsNotRisky() throws {
+        let path = try fixture("cursor_research.jsonl")
+        guard var snap = CursorAgentSource.snapshot(forJSONL: path) else {
+            XCTFail("expected snapshot")
+            return
+        }
+        snap = SourceSnapshot.withDerivedFields(snap)
+        XCTAssertTrue(snap.filesEdited.isEmpty)
+        XCTAssertNotEqual(workStatus(of: snap), .risky)
+    }
+
+    func testAssistantDocTableDoesNotTriggerBlocker() throws {
+        let path = try fixture("cursor_false_blocker.jsonl")
+        guard var snap = CursorAgentSource.snapshot(forJSONL: path) else {
+            XCTFail("expected snapshot")
+            return
+        }
+        snap = SourceSnapshot.withDerivedFields(snap)
+        XCTAssertNotEqual(workStatus(of: snap), .needsYou)
+    }
+
+    func testPipelineNextActionCommitsWhenTestsPassedAndDirty() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/A.swift"]
+        snap.dirtyCount = 2
+        snap.lastText = "swift test passed"
+        let work = WorkStatusResolver.resolve(snap)
+        XCTAssertEqual(work.nextAction, "Commit changes")
+    }
+
+    private func workStatus(of snap: SourceSnapshot) -> WorkStatus {
+        WorkStatusResolver.resolve(snap).status
     }
 
     func testHelperSummariesAreHidden() {

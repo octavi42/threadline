@@ -325,7 +325,8 @@ final class Summarizer {
     /// ellipsis between so the LLM sees both how the session opened and the
     /// recent activity.
     private func buildPrompt(from path: String, context: SummaryContext?) -> String? {
-        let transcriptText = SessionTranscriptCache.transcript(fromJSONL: path)?.summaryText
+        let transcriptText = SessionTranscriptCache.activeTranscript(fromJSONL: path)?.summaryText
+            ?? SessionTranscriptCache.transcript(fromJSONL: path)?.summaryText
         if transcriptText == nil, context == nil { return nil }
 
         var parts: [String] = []
@@ -359,9 +360,16 @@ final class Summarizer {
 
     // MARK: - quality helpers (testable)
 
-    /// Cursor sessions and heavily redacted logs use deterministic briefs only.
+    /// Cursor sessions use structured evidence; LLM runs when the active segment
+    /// has enough tool trace or dialogue to summarize meaningfully.
     static func shouldSummarize(tool: String, jsonlPath: String) -> Bool {
-        if tool == "Cursor" { return false }
+        if tool == "Cursor" {
+            guard let active = SessionTranscriptCache.activeTranscript(fromJSONL: jsonlPath) else {
+                return false
+            }
+            if !active.toolLines.isEmpty { return true }
+            return active.snippets.count >= 2
+        }
         return !isMostlyRedacted(jsonlPath: jsonlPath)
     }
 
@@ -419,7 +427,7 @@ final class Summarizer {
 
         if !ctx.filesEdited.isEmpty {
             let names = ctx.filesEdited.suffix(4).map { ($0 as NSString).lastPathComponent }
-            sentences.append("Touched \(names.joined(separator: ", ")).")
+            sentences.append("Edited \(names.joined(separator: ", ")).")
         }
 
         if let tool = ctx.lastTool?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -433,8 +441,39 @@ final class Summarizer {
         return SourceSnapshot.normalizeBrief(sentences.joined(separator: " "))
     }
 
+    /// Rich deterministic brief from active-segment tool trace (Cursor-friendly).
+    static func structuredEvidenceBrief(for snap: SourceSnapshot) -> String? {
+        guard let path = snap.jsonlPath,
+              let active = SessionTranscriptCache.activeTranscript(fromJSONL: path)
+        else { return nil }
+
+        var sentences: [String] = []
+        if let goal = active.openingGoal {
+            sentences.append("Goal: \(SourceSnapshot.compactLine(goal, limit: 140, maxWords: 22, firstSentence: false)).")
+        } else if let ask = active.latestUserAsk {
+            sentences.append("Goal: \(SourceSnapshot.compactLine(ask, limit: 140, maxWords: 22, firstSentence: false)).")
+        }
+
+        let edits = snap.filesEdited.suffix(4).map { ($0 as NSString).lastPathComponent }
+        if !edits.isEmpty {
+            sentences.append("Edited \(edits.joined(separator: ", ")).")
+        }
+
+        let trace = active.toolLines.suffix(6)
+        if !trace.isEmpty {
+            let joined = trace.joined(separator: "; ")
+            sentences.append("Activity: \(SourceSnapshot.compactLine(joined, limit: 160, maxWords: 24, firstSentence: false)).")
+        } else if let tool = snap.lastTool, !tool.isEmpty {
+            sentences.append("Latest: \(SourceSnapshot.compactLine(tool, limit: 120, maxWords: 18, firstSentence: false)).")
+        }
+
+        guard !sentences.isEmpty else { return nil }
+        return SourceSnapshot.normalizeBrief(sentences.joined(separator: " "))
+    }
+
     static func extractOpeningGoal(from path: String) -> String? {
-        SessionTranscriptCache.transcript(fromJSONL: path)?.openingGoal
+        SessionTranscriptCache.activeOpeningGoal(fromJSONL: path)
+            ?? SessionTranscriptCache.transcript(fromJSONL: path)?.openingGoal
     }
 
     private static func substantiveUserText(_ text: String) -> String? {

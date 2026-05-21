@@ -184,6 +184,9 @@ final class SessionModel: ObservableObject {
     }
 
     static func deterministicBrief(for snap: SourceSnapshot) -> String? {
+        if snap.tool == "Cursor", let brief = Summarizer.structuredEvidenceBrief(for: snap) {
+            return brief
+        }
         let ctx = SummaryContext(
             projectName: snap.projectName,
             currentTask: snap.currentTask,
@@ -196,7 +199,9 @@ final class SessionModel: ObservableObject {
            let path = snap.jsonlPath,
            Summarizer.isMostlyRedacted(jsonlPath: path) {
             var parts = ["Cursor stores redacted transcript text on disk."]
-            if snap.activityLine != "—" {
+            if let task = snap.currentTask, !task.isEmpty {
+                parts.append("Goal: \(SourceSnapshot.compactLine(task, limit: 120, maxWords: 18, firstSentence: false)).")
+            } else if snap.activityLine != "—" {
                 parts.append("Latest: \(snap.activityLine).")
             } else if let goal = goal, !goal.isEmpty {
                 parts.append("Goal: \(SourceSnapshot.compactLine(goal, limit: 120, maxWords: 18, firstSentence: false)).")

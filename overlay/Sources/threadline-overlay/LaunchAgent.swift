@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum LaunchAgent {
     static let label = "com.threadline.overlay"
@@ -79,6 +80,8 @@ enum LaunchAgent {
 
         let uid = getuid()
         _ = runLaunchctl(["bootout",   "gui/\(uid)/\(label)"])
+        // Drop any stray daemon so the new instance can take the exclusive lock.
+        terminateExistingDaemons()
         let rc = runLaunchctl(["bootstrap", "gui/\(uid)", plistPath])
         if rc != 0 {
             FileHandle.standardError.write(Data("launchctl bootstrap failed (rc=\(rc))\n".utf8))
@@ -128,5 +131,31 @@ enum LaunchAgent {
         do { try task.run() } catch { return -1 }
         task.waitUntilExit()
         return task.terminationStatus
+    }
+
+    /// Best-effort cleanup when reinstalling — avoids duplicate hotkey handlers.
+    private static func terminateExistingDaemons() {
+        if let pid = DaemonLock.holderPID(), pid > 0, pid != getpid() {
+            kill(pid, SIGTERM)
+            usleep(200_000)
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-f", "threadline-overlay daemon"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return }
+        for line in text.split(separator: "\n") {
+            guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid > 0 else { continue }
+            if pid == getpid() { continue }
+            kill(pid, SIGTERM)
+        }
+        usleep(200_000)
+        try? FileManager.default.removeItem(atPath: DaemonLock.lockPath)
+        try? FileManager.default.removeItem(atPath: IPC.socketPath)
     }
 }

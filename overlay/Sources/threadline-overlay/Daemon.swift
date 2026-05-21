@@ -9,13 +9,13 @@ enum Daemon {
     private static var hotKey: HotKey?
 
     static func run() {
-        // Single-instance guard: if a daemon is already listening, bail out.
-        let probe = IPC.connect()
-        if probe >= 0 {
-            close(probe)
+        // Exclusive lock — prevents two daemons (launchd + CLI spawn) from both
+        // binding the hotkey and opening separate windows.
+        guard DaemonLock.acquire() else {
             FileHandle.standardError.write(Data("daemon already running\n".utf8))
             exit(0)
         }
+        defer { DaemonLock.release() }
 
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -152,6 +152,7 @@ enum Daemon {
             return "running pid=\(getpid()) visible=\(c.panel.isVisible) window=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n) selected=\(selectedKind):\(selected)"
         case "quit":
             DispatchQueue.main.async {
+                DaemonLock.release()
                 NSApp.terminate(nil)
             }
             return "bye"

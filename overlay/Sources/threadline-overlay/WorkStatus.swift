@@ -22,12 +22,38 @@ struct WorkState: Equatable {
 }
 
 enum WorkStatusResolver {
-    /// Snapshot metadata plus recent JSONL transcript text used for tagging.
+    /// Snapshot metadata plus active-segment user/tool evidence used for tagging.
     static func evidenceText(for snap: SourceSnapshot) -> String {
         var parts = [searchableText(snap)]
         if let path = snap.jsonlPath,
-           let tail = SessionTranscriptCache.transcript(fromJSONL: path, maxBytes: 96 * 1024)?.evidenceText {
+           let tail = SessionTranscriptCache.activeToolTraceEvidence(fromJSONL: path, maxBytes: 96 * 1024) {
             parts.append(tail)
+        }
+        return parts.joined(separator: "\n").lowercased()
+    }
+
+    /// User asks + tool output only — never assistant prose (avoids doc/table false positives).
+    static func blockerEvidence(for snap: SourceSnapshot) -> String {
+        var parts: [String] = []
+        if let task = snap.currentTask { parts.append(task) }
+        if let path = snap.jsonlPath,
+           let tail = SessionTranscriptCache.activeUserAndToolEvidence(fromJSONL: path, maxBytes: 96 * 1024) {
+            parts.append(tail)
+        } else {
+            if let text = snap.lastText { parts.append(text) }
+            if let note = snap.note { parts.append(note) }
+        }
+        return parts.joined(separator: "\n").lowercased()
+    }
+
+    /// Assistant + user + tool text for test pass/fail detection.
+    static func testEvidenceText(for snap: SourceSnapshot) -> String {
+        var parts = [searchableText(snap)]
+        if let path = snap.jsonlPath,
+           let active = SessionTranscriptCache.activeTranscript(fromJSONL: path, maxBytes: 96 * 1024)?.evidenceText {
+            parts.append(active)
+        } else if let text = snap.lastText {
+            parts.append(text)
         }
         return parts.joined(separator: "\n").lowercased()
     }
@@ -61,10 +87,13 @@ enum WorkStatusResolver {
 
     static func resolve(_ snap: SourceSnapshot) -> WorkState {
         let text = evidenceText(for: snap)
+        let blockerText = blockerEvidence(for: snap)
+        let kind = sessionKind(for: snap, evidence: text)
         let codeChanged = hasCodeChanges(snap)
-        let testsPassed = hasPassedTestSignal(text)
-        let testsFailed = hasFailedTestSignal(text)
-        let blocked = blockedReason(text)
+        let testText = testEvidenceText(for: snap)
+        let testsPassed = hasPassedTestSignal(in: testText)
+        let testsFailed = hasFailedTestSignal(in: testText)
+        let blocked = blockedReason(in: blockerText)
 
         if let blocked {
             return WorkState(status: .needsYou,
@@ -73,7 +102,7 @@ enum WorkStatusResolver {
                              rank: 0)
         }
 
-        if snap.state == .awaiting {
+        if snap.state == .awaiting, !isActivelyWorking(snap) {
             return WorkState(status: .needsYou,
                              reason: "waiting for your reply",
                              nextAction: "Reply",
@@ -103,24 +132,34 @@ enum WorkStatusResolver {
                              rank: 7)
         }
 
+        if kind == .research, !codeChanged, isActivelyWorking(snap) || snap.state == .running {
+            let reason = researchReason(snap)
+            return WorkState(status: .working,
+                             reason: reason,
+                             nextAction: "Synthesize findings",
+                             rank: 5)
+        }
+
         if codeChanged && testsPassed {
+            let next = pipelineNextAction(snap, codeChanged: true, testsPassed: true) ?? "Review diff"
             return WorkState(status: .ready,
                              reason: changeSummary(snap, suffix: "tests passed"),
-                             nextAction: "Review diff",
+                             nextAction: next,
                              rank: 4)
         }
 
         if codeChanged {
+            let next = pipelineNextAction(snap, codeChanged: true, testsPassed: false) ?? "Run tests"
             return WorkState(status: .risky,
                              reason: changeSummary(snap, suffix: "no test evidence"),
-                             nextAction: "Run tests",
+                             nextAction: next,
                              rank: 3)
         }
 
         if isActivelyWorking(snap) {
             return WorkState(status: .working,
                              reason: workingReason(snap),
-                             nextAction: "Watch",
+                             nextAction: workingNextAction(snap, kind: kind),
                              rank: 5)
         }
 
@@ -131,9 +170,17 @@ enum WorkStatusResolver {
                              rank: 7)
         }
 
+        if kind == .informational {
+            return WorkState(status: .done,
+                             reason: informationalReason(snap),
+                             nextAction: "Read summary",
+                             rank: 6)
+        }
+
         return WorkState(status: .done,
                          reason: informationalReason(snap),
-                         nextAction: "Read summary",
+                         nextAction: pipelineNextAction(snap, codeChanged: false, testsPassed: false)
+                             ?? "Read summary",
                          rank: 6)
     }
 
@@ -192,9 +239,9 @@ enum WorkStatusResolver {
     }
 
     static func hasCodeChanges(_ snap: SourceSnapshot) -> Bool {
-        if !snap.filesEdited.isEmpty || !snap.fileChanges.isEmpty { return true }
+        if !snap.fileChanges.isEmpty { return true }
         if snap.linesAdded > 0 || snap.linesRemoved > 0 { return true }
-        if let dirty = snap.dirtyCount, dirty > 0 { return true }
+        if !snap.filesEdited.isEmpty { return true }
         return false
     }
 
@@ -244,7 +291,7 @@ enum WorkStatusResolver {
         }
     }
 
-    private static func blockedReason(_ text: String) -> String? {
+    private static func blockedReason(in text: String) -> String? {
         if text.contains("out of extra usage") || text.contains("out of usage") {
             return "usage limit reached"
         }
@@ -263,7 +310,7 @@ enum WorkStatusResolver {
         return nil
     }
 
-    private static func hasFailedTestSignal(_ text: String) -> Bool {
+    static func hasFailedTestSignal(in text: String) -> Bool {
         let phrases = [
             "pytest failed", "npm test failed", "npm run test failed",
             "yarn test failed", "swift test failed", "go test failed",
@@ -284,7 +331,7 @@ enum WorkStatusResolver {
         return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
     }
 
-    private static func hasPassedTestSignal(_ text: String) -> Bool {
+    static func hasPassedTestSignal(in text: String) -> Bool {
         let phrases = [
             "pytest passed", "npm test passed", "npm run test passed",
             "yarn test passed", "swift test passed", "go test passed",
@@ -361,6 +408,52 @@ enum WorkStatusResolver {
         if let text = snap.lastText, !text.isEmpty { return "answer complete" }
         if let note = snap.note, !note.isEmpty { return note }
         return "no code changes"
+    }
+
+    static func sessionKind(for snap: SourceSnapshot, evidence: String) -> SessionKind {
+        if hasCodeChanges(snap) { return .implement }
+        let counts = snap.toolCallCounts
+        let research = (counts["WebSearch"] ?? 0) + (counts["Grep"] ?? 0) + (counts["Glob"] ?? 0)
+        let reads = counts["Read"] ?? 0
+        if research > 0 || reads >= 2 { return .research }
+        if (counts["Shell"] ?? 0) > 0,
+           hasFailedTestSignal(in: evidence) || hasPassedTestSignal(in: evidence) {
+            return .debug
+        }
+        return .informational
+    }
+
+    private static func researchReason(_ snap: SourceSnapshot) -> String {
+        if let task = snap.currentTask, !task.isEmpty {
+            return SourceSnapshot.compactLine(task, limit: 96, maxWords: 14, firstSentence: true)
+        }
+        if snap.toolCallCounts["WebSearch", default: 0] > 0 { return "research in progress" }
+        return "exploring codebase"
+    }
+
+    private static func workingNextAction(_ snap: SourceSnapshot, kind: SessionKind) -> String {
+        switch kind {
+        case .research: return "Synthesize findings"
+        case .implement: return "Watch implementation"
+        case .debug: return "Inspect output"
+        case .informational: return "Watch"
+        }
+    }
+
+    /// Git-aware ship pipeline hint after code changes or a clean tree with dirty files.
+    static func pipelineNextAction(_ snap: SourceSnapshot,
+                                   codeChanged: Bool,
+                                   testsPassed: Bool) -> String? {
+        let dirty = snap.dirtyCount ?? 0
+        if codeChanged && testsPassed {
+            if dirty > 0 { return "Commit changes" }
+            return "Review diff"
+        }
+        if codeChanged && !testsPassed {
+            return "Run tests"
+        }
+        if dirty > 0 { return "Commit or stash" }
+        return nil
     }
 }
 

@@ -1,0 +1,5 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nold task about auth refactor\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Working on auth."}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"clear"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nimplement session segment boundaries\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Adding SessionSegment.swift."},{"type":"tool_use","name":"Write","input":{"path":"/Users/test/proj/SessionSegment.swift","contents":"// segment\n"}}]}}

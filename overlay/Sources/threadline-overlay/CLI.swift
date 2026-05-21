@@ -79,6 +79,9 @@ enum CLI {
     }
 
     private static func spawnDaemon() -> Bool {
+        if LaunchAgent.isInstalled {
+            return kickstartLaunchAgent()
+        }
         guard let fullPath = Bundle.main.executablePath else {
             FileHandle.standardError.write(Data("could not resolve executable path\n".utf8))
             return false
@@ -94,6 +97,22 @@ enum CLI {
             return true
         } catch {
             FileHandle.standardError.write(Data("spawn failed: \(error)\n".utf8))
+            return false
+        }
+    }
+
+    private static func kickstartLaunchAgent() -> Bool {
+        let uid = getuid()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["kickstart", "-k", "gui/\(uid)/\(LaunchAgent.label)"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            return task.terminationStatus == 0
+        } catch {
             return false
         }
     }
