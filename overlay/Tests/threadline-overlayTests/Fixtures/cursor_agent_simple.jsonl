@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nadd logout route\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Adding the logout route now."},{"type":"tool_use","name":"StrReplace","input":{"path":"/Users/test/proj/auth.swift","old_string":"func login() {}\n","new_string":"func login() {}\nfunc logout() {}\n"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Running tests."},{"type":"tool_use","name":"Shell","input":{"command":"swift test","description":"run tests"}}]}}
+{"role":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Test Suite 'All tests' passed\nExecuted 3 tests, with 0 failures (0 unexpected)"}]}}

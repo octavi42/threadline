@@ -99,9 +99,11 @@ installed, or focused window is Cursor/VS Code).
   assistant/user text, model, cwd, timestamp.
 - **Codex CLI:** newest `rollout-*.jsonl` under `~/.codex/sessions/YYYY/MM/DD/`.
   Pulls last `agent_message` / `user_message`, plus cwd from `session_meta`.
-- **Cursor:** newest `state.vscdb` under
-  `~/Library/Application Support/Cursor/User/workspaceStorage/`. Surfaces the
-  active workspace folder and mtime (v0 — full chat parsing is TODO).
+- **Cursor Agent CLI:** `*.jsonl` under
+  `~/.cursor/projects/<workspace>/agent-transcripts/<session-id>/`. Pulls last
+  assistant/user text, tool calls (`StrReplace`, `Shell`, …), and cwd from
+  `.workspace-trusted`. Live `cursor-agent` processes are matched via open
+  transcript files or `~/.cursor/chats/.../store.db` session ids.
 
 Sources are re-scanned every 3 seconds.
 
@@ -121,7 +123,7 @@ threadline-overlay (single binary)
                     ├── SessionModel (Combine, 3s poll)
                     │     ├── ClaudeSource  (~/.claude/projects/*.jsonl)
                     │     ├── CodexSource   (~/.codex/sessions/**/*.jsonl)
-                    │     └── CursorSource  (workspaceStorage state.vscdb)
+                    │     └── CursorAgentSource  (~/.cursor/projects/.../agent-transcripts)
                     └── OverlayController (NSWindow + show/hide)
 ```
 
@@ -148,6 +150,6 @@ Configure via environment or `~/.threadline/config.json`:
 
 ## Roadmap
 
-- Parse Cursor `cursorDiskKV` bubbles for real chat text.
+- Parse in-IDE Composer chats from `workspaceStorage` / `cursorDiskKV` (CLI agent is supported).
 - Token/usage display per source.
 - Native diff-to-prompt attribution (X-Ray) in the overlay.

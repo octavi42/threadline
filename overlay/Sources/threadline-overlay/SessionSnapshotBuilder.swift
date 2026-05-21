@@ -9,6 +9,7 @@ enum SessionSnapshotBuilder {
             switch session.tool {
             case "Claude": snap = ClaudeSource.snapshot(forJSONL: session.jsonlPath)
             case "Codex":  snap = CodexSource.snapshot(forJSONL: session.jsonlPath)
+            case "Cursor": snap = CursorAgentSource.snapshot(forJSONL: session.jsonlPath)
             default:       snap = nil
             }
             if var s = snap {
@@ -17,10 +18,12 @@ enum SessionSnapshotBuilder {
             }
         }
 
-        if LiveAgents.cursorRunning {
-            let cursorCutoff = Date().addingTimeInterval(-30 * 60)
-            all.append(contentsOf: CursorSource.readAll(since: cursorCutoff)
-                .map(SourceSnapshot.withDerivedFields))
+        var seenIDs = Set(all.map(\.id))
+        let diskCutoff = Date().addingTimeInterval(-7 * 24 * 3600)
+        for snap in CursorAgentSource.readAll(since: diskCutoff).map(SourceSnapshot.withDerivedFields) {
+            if seenIDs.insert(snap.id).inserted {
+                all.append(snap)
+            }
         }
 
         all = all.filter(WorkStatusResolver.shouldDisplay)

@@ -136,7 +136,8 @@ After install, open a **new terminal tab** or run a command so the shell hook re
 ```
 ~/.claude/projects/          ─┐
 ~/.codex/sessions/           ─┼─► threadline-overlay daemon ─► trust inbox UI
-Cursor workspaceStorage/     ─┘         ▲
+~/.cursor/projects/.../      ─┘         ▲
+  agent-transcripts/
                                         │ Unix socket (~/.threadline/overlay.sock)
 ~/.zshrc / ~/.bashrc hooks ─────────────┘  (pid, cwd, tty, terminal surface per prompt)
 ```

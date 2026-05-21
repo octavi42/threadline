@@ -4,12 +4,12 @@ import Foundation
 
 /// One open AI tab — a (tool, pid, JSONL) tuple.
 struct LiveSession: Hashable {
-    let tool: String       // "Claude" | "Codex"
+    let tool: String       // "Claude" | "Codex" | "Cursor"
     let pid: pid_t
     let jsonlPath: String
 }
 
-/// Per-tab discovery of active Claude / Codex sessions.
+/// Per-tab discovery of active Claude / Codex / Cursor Agent sessions.
 ///
 /// Codex keeps its session JSONL open for append, so we read its fd table
 /// directly. Claude closes the fd between turns, so we instead match each
@@ -21,8 +21,9 @@ enum LiveAgents {
         var sessions: [LiveSession] = []
         var usedPaths: Set<String> = []
 
-        struct ClaudeProc { let pid: pid_t; let started: Date }
-        var claudeByCwd: [String: [ClaudeProc]] = [:]
+        struct AgentProc { let pid: pid_t; let started: Date }
+        var claudeByCwd: [String: [AgentProc]] = [:]
+        var cursorByCwd: [String: [AgentProc]] = [:]
 
         for info in ProcTable.all() {
             let pid = info.kp_proc.p_pid
@@ -32,7 +33,7 @@ enum LiveAgents {
                 if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
                 guard let cwd = procCwd(pid: pid) else { continue }
                 claudeByCwd[cwd, default: []].append(
-                    ClaudeProc(pid: pid, started: startTime(info: info))
+                    AgentProc(pid: pid, started: startTime(info: info))
                 )
             case "codex":
                 if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
@@ -41,6 +42,19 @@ enum LiveAgents {
                         sessions.append(LiveSession(tool: "Codex", pid: pid, jsonlPath: path))
                         usedPaths.insert(path)
                     }
+                }
+            case "node", "cursor-agent":
+                if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
+                if let path = resolveCursorJSONL(pid: pid, started: startTime(info: info)),
+                   !usedPaths.contains(path) {
+                    sessions.append(LiveSession(tool: "Cursor", pid: pid, jsonlPath: path))
+                    usedPaths.insert(path)
+                    continue
+                }
+                if let cwd = procCwd(pid: pid) {
+                    cursorByCwd[cwd, default: []].append(
+                        AgentProc(pid: pid, started: startTime(info: info))
+                    )
                 }
             default:
                 continue
@@ -77,6 +91,37 @@ enum LiveAgents {
                 }
             }
         }
+
+        CursorAgentSource.refreshSessionIndex()
+        for (cwd, procs) in cursorByCwd {
+            guard let projectDir = CursorAgentSource.projectDir(forWorkspace: cwd) else { continue }
+            let transcripts = (projectDir as NSString).appendingPathComponent("agent-transcripts")
+            let fm = FileManager.default
+            guard let sessionDirs = try? fm.contentsOfDirectory(atPath: transcripts) else { continue }
+            var available: [(path: String, mtime: Date)] = []
+            for sessionID in sessionDirs {
+                let p = (transcripts as NSString)
+                    .appendingPathComponent(sessionID)
+                    .appending("/\(sessionID).jsonl")
+                if let attrs = try? fm.attributesOfItem(atPath: p),
+                   let m = attrs[.modificationDate] as? Date {
+                    available.append((p, m))
+                }
+            }
+            for proc in procs.sorted(by: { $0.started > $1.started }) {
+                let remaining = available.filter { !usedPaths.contains($0.path) }
+                guard let pick = remaining.min(by: {
+                    abs($0.mtime.timeIntervalSince(proc.started)) <
+                    abs($1.mtime.timeIntervalSince(proc.started))
+                }) else { continue }
+                if abs(pick.mtime.timeIntervalSince(proc.started)) <= 15 * 60 {
+                    sessions.append(LiveSession(tool: "Cursor",
+                                                pid: proc.pid,
+                                                jsonlPath: pick.path))
+                    usedPaths.insert(pick.path)
+                }
+            }
+        }
         return sessions
     }
 
@@ -93,9 +138,68 @@ enum LiveAgents {
                 || args.contains("--no-session-persistence")
         case "codex":
             return args.contains("exec")
+        case "node", "cursor-agent":
+            return !isCursorAgentProcess(args: args, comm: comm)
         default:
             return false
         }
+    }
+
+    private static func isCursorAgentProcess(args: [String], comm: String) -> Bool {
+        if comm == "cursor-agent" {
+            return args.contains("agent")
+        }
+        guard comm == "node", args.contains("agent") else { return false }
+        if args.contains("worker-server") { return false }
+        return args.contains { arg in
+            arg.contains("cursor-agent/versions") || arg.contains("/.local/bin/cursor-agent")
+        }
+    }
+
+    private static func resolveCursorJSONL(pid: pid_t, started: Date) -> String? {
+        for path in openJSONLPaths(pid: pid) where path.contains("/agent-transcripts/") {
+            return path
+        }
+        if let sessionID = openChatSessionID(pid: pid) {
+            return CursorAgentSource.jsonlPath(forSessionID: sessionID)
+        }
+        return nil
+    }
+
+    private static func openChatSessionID(pid: pid_t) -> String? {
+        for path in openFilePaths(pid: pid) where path.contains("/.cursor/chats/") {
+            if path.hasSuffix("/store.db") || path.hasSuffix("store.db") {
+                return URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+            }
+        }
+        return nil
+    }
+
+    private static func openFilePaths(pid: pid_t) -> [String] {
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        let probe = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard probe > 0 else { return [] }
+        let count = Int(probe) / stride + 32
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: count)
+        let n = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(count * stride))
+        guard n > 0 else { return [] }
+        var out: [String] = []
+        for i in 0..<Int(n) / stride {
+            guard fds[i].proc_fdtype == UInt32(PROX_FDTYPE_VNODE) else { continue }
+            var vi = vnode_fdinfowithpath()
+            let r = proc_pidfdinfo(pid, Int32(fds[i].proc_fd),
+                                   PROC_PIDFDVNODEPATHINFO,
+                                   &vi,
+                                   Int32(MemoryLayout<vnode_fdinfowithpath>.stride))
+            guard r > 0 else { continue }
+            let path = withUnsafePointer(to: &vi.pvip.vip_path) { p in
+                p.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                    String(cString: $0)
+                }
+            }
+            if !path.isEmpty { out.append(path) }
+        }
+        return out
     }
 
     /// Whether Cursor.app itself is running.

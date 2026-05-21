@@ -57,7 +57,14 @@ struct SessionTranscript: Equatable {
     }
 
     static func substantiveUserText(_ text: String) -> String? {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let start = cleaned.range(of: "<user_query>") {
+            cleaned = String(cleaned[start.upperBound...])
+        }
+        if let end = cleaned.range(of: "</user_query>") {
+            cleaned = String(cleaned[..<end.lowerBound])
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         guard cleaned.count >= 12, !shouldDiscardSnippet(cleaned) else { return nil }
         let lower = cleaned.lowercased()
         if lower == "yes" || lower == "continue" || lower == "go ahead" { return nil }
@@ -116,6 +123,12 @@ enum SessionTranscriptCache {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
 
+            if let role = obj["role"] as? String,
+               let message = obj["message"] as? [String: Any] {
+                appendCursorMessage(role: role, message: message, into: &out)
+                continue
+            }
+
             if let message = obj["message"] as? [String: Any] {
                 appendClaudeMessage(message, into: &out)
                 continue
@@ -132,6 +145,50 @@ enum SessionTranscriptCache {
         }
 
         return out
+    }
+
+    private static func appendCursorMessage(role: String,
+                                            message: [String: Any],
+                                            into out: inout SessionTranscript) {
+        guard let content = message["content"] as? [[String: Any]] else { return }
+        for block in content {
+            switch block["type"] as? String {
+            case "text":
+                if let t = block["text"] as? String, keepCursorSnippet(t) {
+                    out.snippets.append(SessionTranscript.Snippet(role: role, text: t))
+                }
+            case "tool_use":
+                if let line = cursorToolUseLine(block) {
+                    out.toolLines.append(line)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private static func keepCursorSnippet(_ text: String) -> Bool {
+        let cleaned = text
+            .replacingOccurrences(of: "<user_query>", with: "")
+            .replacingOccurrences(of: "</user_query>", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return keepSnippet(cleaned) && !cleaned.hasPrefix("[REDACTED]")
+    }
+
+    private static func cursorToolUseLine(_ block: [String: Any]) -> String? {
+        guard let name = block["name"] as? String else { return nil }
+        let input = block["input"] as? [String: Any] ?? [:]
+        if let path = (input["path"] as? String) ?? (input["file_path"] as? String) {
+            return "\(name) \((path as NSString).lastPathComponent)"
+        }
+        if let cmd = input["command"] as? String {
+            let first = cmd.split(separator: "\n").first.map(String.init) ?? cmd
+            return "\(name) \(SourceSnapshot.compactLine(first, limit: 120, firstSentence: false))"
+        }
+        if let pattern = input["pattern"] as? String {
+            return "\(name) \(SourceSnapshot.compactLine(pattern, limit: 80, firstSentence: false))"
+        }
+        return name
     }
 
     private static func appendClaudeMessage(_ message: [String: Any],

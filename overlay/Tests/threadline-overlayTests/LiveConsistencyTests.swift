@@ -12,6 +12,7 @@ final class LiveConsistencyTests: XCTestCase {
             switch session.tool {
             case "Claude": snap = ClaudeSource.snapshot(forJSONL: session.jsonlPath)
             case "Codex":  snap = CodexSource.snapshot(forJSONL: session.jsonlPath)
+            case "Cursor": snap = CursorAgentSource.snapshot(forJSONL: session.jsonlPath)
             default:       continue
             }
             guard var s = snap else { continue }
@@ -46,6 +47,14 @@ final class LiveConsistencyTests: XCTestCase {
                       "Set THREADLINE_LIVE_TEST=1 to scan local agent logs")
     }
 
+    func testBuilderIncludesCursorSessions() throws {
+        try requireLiveTest()
+        let all = SessionSnapshotBuilder.buildSnapshots()
+        let cursor = all.filter { $0.tool == "Cursor" }
+        print("BUILDER_CURSOR_COUNT \(cursor.count) TOTAL \(all.count)")
+        XCTAssertGreaterThan(cursor.count, 0, "expected Cursor agent sessions from ~/.cursor/projects")
+    }
+
     func testStatusDistributionSnapshot() throws {
         try requireLiveTest()
         var all: [SourceSnapshot] = []
@@ -54,6 +63,7 @@ final class LiveConsistencyTests: XCTestCase {
             switch session.tool {
             case "Claude": snap = ClaudeSource.snapshot(forJSONL: session.jsonlPath)
             case "Codex":  snap = CodexSource.snapshot(forJSONL: session.jsonlPath)
+            case "Cursor": snap = CursorAgentSource.snapshot(forJSONL: session.jsonlPath)
             default:       continue
             }
             guard var s = snap else { continue }

@@ -114,6 +114,28 @@ final class CodexSourceTests: XCTestCase {
     }
 }
 
+final class CursorAgentSourceTests: XCTestCase {
+    func testSnapshotFromFixture() throws {
+        let path = try fixture("cursor_agent_simple.jsonl")
+        guard let snap = CursorAgentSource.snapshot(forJSONL: path) else {
+            XCTFail("expected a snapshot")
+            return
+        }
+        XCTAssertEqual(snap.tool, "Cursor")
+        XCTAssertEqual(snap.badge, "CUR")
+        XCTAssertEqual(snap.cwd, "/Users/test/proj")
+        XCTAssertTrue(snap.id.hasPrefix("cursor:"))
+        XCTAssertEqual(snap.filesEdited, ["/Users/test/proj/auth.swift"])
+        XCTAssertEqual(snap.toolCallCounts["StrReplace"], 1)
+        XCTAssertEqual(snap.toolCallCounts["Shell"], 1)
+        XCTAssertEqual(snap.linesAdded, 3)
+        XCTAssertEqual(snap.linesRemoved, 2)
+        XCTAssertEqual(snap.lastText, "Running tests.")
+        XCTAssertEqual(snap.fileChanges.count, 1)
+        XCTAssertEqual(snap.fileChanges.first?.edits.first?.tool, "Edit")
+    }
+}
+
 final class SessionTranscriptTests: XCTestCase {
     func testSharedTranscriptParsesClaudeFixture() throws {
         let path = try fixture("claude_simple.jsonl")
@@ -130,6 +152,14 @@ final class SessionTranscriptTests: XCTestCase {
 
         XCTAssertNotNil(transcript.evidenceText)
         XCTAssertTrue(transcript.evidenceText?.lowercased().contains("swift test") == true)
+    }
+
+    func testSharedTranscriptParsesCursorFixture() throws {
+        let path = try fixture("cursor_agent_simple.jsonl")
+        let transcript = try XCTUnwrap(SessionTranscriptCache.transcript(fromJSONL: path))
+
+        XCTAssertEqual(transcript.openingGoal, "add logout route")
+        XCTAssertTrue(transcript.summaryText?.contains("tool: StrReplace auth.swift") == true)
     }
 }
 
