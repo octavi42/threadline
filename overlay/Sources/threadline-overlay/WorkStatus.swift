@@ -170,6 +170,9 @@ enum WorkStatusResolver {
 
     static func sortByWork(_ wa: WorkState, _ wb: WorkState,
                            a: SourceSnapshot, b: SourceSnapshot) -> Bool {
+        let aLive = a.livePid != nil
+        let bLive = b.livePid != nil
+        if aLive != bLive { return aLive && !bLive }
         if wa.rank != wb.rank { return wa.rank < wb.rank }
         let ad = a.updatedAt ?? .distantPast
         let bd = b.updatedAt ?? .distantPast

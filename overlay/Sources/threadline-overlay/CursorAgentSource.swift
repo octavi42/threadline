@@ -11,7 +11,20 @@ enum CursorAgentSource {
     private static var sessionPathIndex: [String: String] = [:]
     private static let indexLock = NSLock()
 
-    /// All JSONL sessions modified after `cutoff`.
+    /// True when `workspacePath` from `.workspace-trusted` is a real project folder.
+    static func isTrustedWorkspacePath(_ path: String) -> Bool {
+        let standard = (path as NSString).standardizingPath
+        let home = (FileManager.default.homeDirectoryForCurrentUser.path as NSString)
+            .standardizingPath
+        if standard == home || standard == "/" { return false }
+        let rel = standard.hasPrefix(home + "/")
+            ? String(standard.dropFirst(home.count + 1))
+            : standard
+        let depth = rel.split(separator: "/").count
+        return depth >= 1
+    }
+
+    /// All JSONL sessions modified after `cutoff` (trusted workspaces only).
     static func readAll(since cutoff: Date) -> [SourceSnapshot] {
         rebuildSessionIndex()
         var out: [SourceSnapshot] = []
@@ -49,6 +62,7 @@ enum CursorAgentSource {
             guard let data = try? Data(contentsOf: URL(fileURLWithPath: trusted)),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let path = obj["workspacePath"] as? String,
+                  isTrustedWorkspacePath(path),
                   path == cwd
             else { continue }
             return (projectsRoot as NSString).appendingPathComponent(entry)
@@ -60,9 +74,15 @@ enum CursorAgentSource {
 
     private static func snapshot(jsonlPath: String, mtime: Date) -> SourceSnapshot? {
         guard let tail = tailOfFile(path: jsonlPath, maxBytes: 128 * 1024) else { return nil }
-        guard let cwd = workspacePath(forJSONL: jsonlPath) ?? inferCwd(fromTail: tail) else {
-            return nil
+        let cwd: String?
+        if jsonlPath.contains("/.cursor/projects/") {
+            guard let ws = workspacePath(forJSONL: jsonlPath),
+                  isTrustedWorkspacePath(ws) else { return nil }
+            cwd = ws
+        } else {
+            cwd = inferCwd(fromTail: tail)
         }
+        guard let cwd = cwd else { return nil }
 
         var snap = SourceSnapshot(id: "cursor:\(jsonlPath)",
                                   tool: "Cursor",
@@ -277,7 +297,9 @@ enum CursorAgentSource {
             return
         }
 
+        let skippedSlugs: Set<String> = ["empty-window", "mcps"]
         for project in projects {
+            if skippedSlugs.contains(project) { continue }
             let transcripts = (projectsRoot as NSString)
                 .appendingPathComponent(project)
                 .appending("/agent-transcripts")
@@ -312,7 +334,8 @@ enum CursorAgentSource {
             .appending("/.workspace-trusted")
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: trusted)),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let path = obj["workspacePath"] as? String
+              let path = obj["workspacePath"] as? String,
+              isTrustedWorkspacePath(path)
         else { return nil }
         return path
     }

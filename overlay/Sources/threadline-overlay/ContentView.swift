@@ -127,6 +127,14 @@ private struct AgentsList: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
                 }
+                if model.hiddenCursorHistoryCount > 0 {
+                    Button(model.showCursorHistorySessions ? "Hide history" : "Show \(model.hiddenCursorHistoryCount) history") {
+                        model.setShowCursorHistorySessions(!model.showCursorHistorySessions)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                }
                 Text("\(inboxFolders.count)/\(model.inboxSnapshotCount)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -287,6 +295,12 @@ private struct AgentRow: View {
             BadgeView(label: snap.badge, color: badgeColor(snap.tool)).padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
+                    if snap.livePid != nil {
+                        Circle()
+                            .fill(Color(red: 0.35, green: 0.85, blue: 0.45))
+                            .frame(width: 6, height: 6)
+                            .help("Live agent process")
+                    }
                     Text(snap.tool)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
@@ -875,7 +889,15 @@ private struct SessionBriefSection: View {
     let snap: SourceSnapshot
 
     private var brief: String? {
-        model.summaries[snap.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let llm = model.summaries[snap.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let llm, !llm.isEmpty { return llm }
+        return SessionModel.deterministicBrief(for: snap)
+    }
+
+    private var waitsForLLM: Bool {
+        guard let path = snap.jsonlPath else { return false }
+        return Summarizer.shouldSummarize(tool: snap.tool, jsonlPath: path)
+            && (model.summaries[snap.id]?.isEmpty ?? true)
     }
 
     var body: some View {
@@ -888,7 +910,7 @@ private struct SessionBriefSection: View {
                     .foregroundColor(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
+            } else if waitsForLLM {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Building session brief…")
@@ -898,6 +920,10 @@ private struct SessionBriefSection: View {
                 Text("Local Ollama, then Claude/Codex. Local AI: \(LocalLLM.statusLabel).")
                     .font(.system(size: 11))
                     .foregroundColor(Color.secondary.opacity(0.8))
+            } else {
+                Text("No session summary available.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
             }
         }
         .padding(12)

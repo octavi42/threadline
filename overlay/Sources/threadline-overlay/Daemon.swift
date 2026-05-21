@@ -140,6 +140,8 @@ enum Daemon {
                 return [header] + rows
             }
             return lines.joined(separator: "\n")
+        case "snapshots":
+            return snapshotsPayload(rest: rest, model: model)
         case "status":
             let f = c.panel.frame
             let n = model?.snapshots.count ?? 0
@@ -156,6 +158,48 @@ enum Daemon {
         default:
             return "unknown: \(cmd)"
         }
+    }
+
+    /// Machine-readable snapshot dump for CLI E2E (`snapshots --json`).
+    private static func snapshotsPayload(rest: String, model: SessionModel?) -> String {
+        guard rest.contains("--json") else {
+            return "usage: snapshots --json"
+        }
+        guard let model = model else {
+            return "{\"error\":\"no model\"}"
+        }
+        let rows: [[String: Any]] = model.snapshots.map { snap in
+            var row: [String: Any] = [
+                "id": snap.id,
+                "tool": snap.tool,
+                "badge": snap.badge,
+                "cwd": snap.cwd ?? "",
+                "workStatus": snap.workState.status.rawValue,
+                "state": snap.state.rawValue,
+                "activityLine": snap.activityLine,
+            ]
+            if let pid = snap.livePid { row["livePid"] = Int(pid) }
+            if let updated = snap.updatedAt {
+                row["updatedAt"] = updated.timeIntervalSince1970
+            }
+            return row
+        }
+        let liveCursorAgents = LiveAgents.liveSessions().filter { $0.tool == "Cursor" }.count
+        let payload: [String: Any] = [
+            "daemonPid": Int(getpid()),
+            "agentCount": model.snapshots.count,
+            "inboxAgentCount": model.inboxSnapshotCount,
+            "hiddenCursorHistoryCount": model.hiddenCursorHistoryCount,
+            "showCursorHistorySessions": model.showCursorHistorySessions,
+            "liveCursorAgentCount": liveCursorAgents,
+            "snapshots": rows,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return "{\"error\":\"encode failed\"}"
+        }
+        return json
     }
 
     private static func cwdArg(_ rest: String) -> String? {

@@ -19,6 +19,19 @@ swift build
 swift test
 ```
 
+Live Cursor E2E (macOS with running `cursor-agent` processes):
+
+```bash
+cd overlay
+THREADLINE_BIN="$(pwd)/.build/release/threadline-overlay" ./scripts/e2e-live.sh
+```
+
+Optional in-process live tests:
+
+```bash
+THREADLINE_LIVE_TEST=1 swift test --filter LiveConsistency
+```
+
 Run from source:
 
 ```bash

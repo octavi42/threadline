@@ -19,6 +19,10 @@ final class SessionModel: ObservableObject {
     @Published var showInactiveSessions = false
     /// When false, hide sessions older than 24h (live PIDs always stay visible).
     @Published var showOlderSessions = false
+    /// When false, Cursor inbox shows only live `cursor-agent` processes (not 7-day disk history).
+    @Published var showCursorHistorySessions = false
+    /// Cursor sessions on disk hidden while `showCursorHistorySessions` is false.
+    @Published private(set) var hiddenCursorHistoryCount = 0
     private var timer: Timer?
     private let refreshQueue = DispatchQueue(label: "threadline.overlay.refresh", qos: .utility)
     private var refreshGeneration = 0
@@ -42,20 +46,30 @@ final class SessionModel: ObservableObject {
         refreshGeneration += 1
         let generation = refreshGeneration
 
-        let all = SessionSnapshotBuilder.buildSnapshots()
+        let built = SessionSnapshotBuilder.build(
+            includeCursorHistory: showCursorHistorySessions
+        )
+        let all = built.snapshots
         let folders = SessionGrouper.makeFolders(from: all)
         let pollInterval = Self.preferredPollInterval(for: all)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, generation == self.refreshGeneration else { return }
-            self.applyRefresh(snapshots: all, folders: folders, pollInterval: pollInterval)
+            self.applyRefresh(snapshots: all,
+                              folders: folders,
+                              pollInterval: pollInterval,
+                              hiddenCursorHistory: built.hiddenCursorHistoryCount)
         }
     }
 
     private func applyRefresh(snapshots all: [SourceSnapshot],
                               folders: [SessionFolder],
-                              pollInterval: TimeInterval) {
+                              pollInterval: TimeInterval,
+                              hiddenCursorHistory: Int) {
         if all != snapshots { self.snapshots = all }
+        if hiddenCursorHistory != hiddenCursorHistoryCount {
+            hiddenCursorHistoryCount = hiddenCursorHistory
+        }
         if folders != self.folders {
             self.folders = folders
             pruneCollapsedFolders(visible: folders.map(\.id))
@@ -148,6 +162,12 @@ final class SessionModel: ObservableObject {
         ))
     }
 
+    func setShowCursorHistorySessions(_ value: Bool) {
+        guard showCursorHistorySessions != value else { return }
+        showCursorHistorySessions = value
+        refresh()
+    }
+
     private func normalizedCwd(_ cwd: String?) -> String {
         guard let cwd = cwd, !cwd.isEmpty else { return "Unknown" }
         return (cwd as NSString).standardizingPath
@@ -163,9 +183,41 @@ final class SessionModel: ObservableObject {
         )
     }
 
+    static func deterministicBrief(for snap: SourceSnapshot) -> String? {
+        let ctx = SummaryContext(
+            projectName: snap.projectName,
+            currentTask: snap.currentTask,
+            lastTool: snap.lastTool,
+            filesEdited: snap.filesEdited,
+            activityLine: snap.activityLine
+        )
+        let goal = snap.jsonlPath.flatMap { Summarizer.extractOpeningGoal(from: $0) }
+        if snap.tool == "Cursor",
+           let path = snap.jsonlPath,
+           Summarizer.isMostlyRedacted(jsonlPath: path) {
+            var parts = ["Cursor stores redacted transcript text on disk."]
+            if snap.activityLine != "—" {
+                parts.append("Latest: \(snap.activityLine).")
+            } else if let goal = goal, !goal.isEmpty {
+                parts.append("Goal: \(SourceSnapshot.compactLine(goal, limit: 120, maxWords: 18, firstSentence: false)).")
+            }
+            return SourceSnapshot.normalizeBrief(parts.joined(separator: " "))
+        }
+        return Summarizer.structuralFallback(context: ctx, openingGoal: goal)
+    }
+
     private func kickoffSummary(for snap: SourceSnapshot) {
         guard let path = snap.jsonlPath, let mtime = snap.updatedAt else { return }
         let id = snap.id
+
+        guard Summarizer.shouldSummarize(tool: snap.tool, jsonlPath: path) else {
+            if let brief = Self.deterministicBrief(for: snap) {
+                let normalized = SourceSnapshot.normalizeBrief(brief)
+                if summaries[id] != normalized { summaries[id] = normalized }
+            }
+            return
+        }
+
         let ctx = summaryContext(for: snap)
         let cached = Summarizer.shared.summary(
             forJSONL: path,

@@ -359,6 +359,25 @@ final class Summarizer {
 
     // MARK: - quality helpers (testable)
 
+    /// Cursor sessions and heavily redacted logs use deterministic briefs only.
+    static func shouldSummarize(tool: String, jsonlPath: String) -> Bool {
+        if tool == "Cursor" { return false }
+        return !isMostlyRedacted(jsonlPath: jsonlPath)
+    }
+
+    static func isMostlyRedacted(jsonlPath: String, maxBytes: Int = 96 * 1024) -> Bool {
+        guard let tail = tailOfFile(path: jsonlPath, maxBytes: maxBytes), !tail.isEmpty else {
+            return true
+        }
+        let redactedHits = tail.components(separatedBy: "[REDACTED]").count - 1
+        if redactedHits == 0 { return false }
+        let assistantLines = tail.split(separator: "\n")
+            .filter { $0.contains("\"role\":\"assistant\"") }
+            .count
+        if assistantLines == 0 { return redactedHits >= 2 }
+        return Double(redactedHits) / Double(assistantLines) >= 0.5
+    }
+
     static func shouldDiscardSnippet(_ text: String) -> Bool {
         SessionTranscript.shouldDiscardSnippet(text)
     }

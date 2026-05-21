@@ -23,7 +23,6 @@ enum LiveAgents {
 
         struct AgentProc { let pid: pid_t; let started: Date }
         var claudeByCwd: [String: [AgentProc]] = [:]
-        var cursorByCwd: [String: [AgentProc]] = [:]
 
         for info in ProcTable.all() {
             let pid = info.kp_proc.p_pid
@@ -45,16 +44,11 @@ enum LiveAgents {
                 }
             case "node", "cursor-agent":
                 if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
-                if let path = resolveCursorJSONL(pid: pid, started: startTime(info: info)),
-                   !usedPaths.contains(path) {
+                if let path = resolveCursorJSONL(pid: pid),
+                   !usedPaths.contains(path),
+                   CursorAgentSource.snapshot(forJSONL: path) != nil {
                     sessions.append(LiveSession(tool: "Cursor", pid: pid, jsonlPath: path))
                     usedPaths.insert(path)
-                    continue
-                }
-                if let cwd = procCwd(pid: pid) {
-                    cursorByCwd[cwd, default: []].append(
-                        AgentProc(pid: pid, started: startTime(info: info))
-                    )
                 }
             default:
                 continue
@@ -92,36 +86,6 @@ enum LiveAgents {
             }
         }
 
-        CursorAgentSource.refreshSessionIndex()
-        for (cwd, procs) in cursorByCwd {
-            guard let projectDir = CursorAgentSource.projectDir(forWorkspace: cwd) else { continue }
-            let transcripts = (projectDir as NSString).appendingPathComponent("agent-transcripts")
-            let fm = FileManager.default
-            guard let sessionDirs = try? fm.contentsOfDirectory(atPath: transcripts) else { continue }
-            var available: [(path: String, mtime: Date)] = []
-            for sessionID in sessionDirs {
-                let p = (transcripts as NSString)
-                    .appendingPathComponent(sessionID)
-                    .appending("/\(sessionID).jsonl")
-                if let attrs = try? fm.attributesOfItem(atPath: p),
-                   let m = attrs[.modificationDate] as? Date {
-                    available.append((p, m))
-                }
-            }
-            for proc in procs.sorted(by: { $0.started > $1.started }) {
-                let remaining = available.filter { !usedPaths.contains($0.path) }
-                guard let pick = remaining.min(by: {
-                    abs($0.mtime.timeIntervalSince(proc.started)) <
-                    abs($1.mtime.timeIntervalSince(proc.started))
-                }) else { continue }
-                if abs(pick.mtime.timeIntervalSince(proc.started)) <= 15 * 60 {
-                    sessions.append(LiveSession(tool: "Cursor",
-                                                pid: proc.pid,
-                                                jsonlPath: pick.path))
-                    usedPaths.insert(pick.path)
-                }
-            }
-        }
         return sessions
     }
 
@@ -156,12 +120,14 @@ enum LiveAgents {
         }
     }
 
-    private static func resolveCursorJSONL(pid: pid_t, started: Date) -> String? {
-        for path in openJSONLPaths(pid: pid) where path.contains("/agent-transcripts/") {
+    private static func resolveCursorJSONL(pid: pid_t) -> String? {
+        CursorAgentSource.refreshSessionIndex()
+        if let sessionID = openChatSessionID(pid: pid),
+           let path = CursorAgentSource.jsonlPath(forSessionID: sessionID) {
             return path
         }
-        if let sessionID = openChatSessionID(pid: pid) {
-            return CursorAgentSource.jsonlPath(forSessionID: sessionID)
+        for path in openJSONLPaths(pid: pid) where path.contains("/agent-transcripts/") {
+            return path
         }
         return nil
     }

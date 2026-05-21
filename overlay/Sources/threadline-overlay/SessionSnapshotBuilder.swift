@@ -1,8 +1,17 @@
 import Foundation
 
 enum SessionSnapshotBuilder {
-    static func buildSnapshots() -> [SourceSnapshot] {
+    /// When `includeCursorHistory` is false, only live Cursor Agent processes appear
+    /// (no 7-day disk scan). Claude/Codex behavior is unchanged.
+    struct BuildResult {
+        let snapshots: [SourceSnapshot]
+        /// Cursor JSONL on disk not shown while history toggle is off.
+        let hiddenCursorHistoryCount: Int
+    }
+
+    static func build(includeCursorHistory: Bool = false) -> BuildResult {
         var all: [SourceSnapshot] = []
+        var hiddenCursorHistory = 0
 
         for session in LiveAgents.liveSessions() {
             var snap: SourceSnapshot?
@@ -20,15 +29,24 @@ enum SessionSnapshotBuilder {
 
         var seenIDs = Set(all.map(\.id))
         let diskCutoff = Date().addingTimeInterval(-7 * 24 * 3600)
-        for snap in CursorAgentSource.readAll(since: diskCutoff).map(SourceSnapshot.withDerivedFields) {
-            if seenIDs.insert(snap.id).inserted {
+        let diskCursor = CursorAgentSource.readAll(since: diskCutoff)
+            .map(SourceSnapshot.withDerivedFields)
+
+        if includeCursorHistory {
+            for snap in diskCursor where seenIDs.insert(snap.id).inserted {
                 all.append(snap)
             }
+        } else {
+            hiddenCursorHistory = diskCursor.filter { !seenIDs.contains($0.id) }.count
         }
 
         all = all.filter(WorkStatusResolver.shouldDisplay)
         all.sort(by: WorkStatusResolver.sort)
-        return all
+        return BuildResult(snapshots: all, hiddenCursorHistoryCount: hiddenCursorHistory)
+    }
+
+    static func buildSnapshots(includeCursorHistory: Bool = false) -> [SourceSnapshot] {
+        build(includeCursorHistory: includeCursorHistory).snapshots
     }
 
     private static func enrichWithLiveIdentity(_ snap: inout SourceSnapshot,

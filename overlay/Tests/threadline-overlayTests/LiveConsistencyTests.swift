@@ -49,10 +49,26 @@ final class LiveConsistencyTests: XCTestCase {
 
     func testBuilderIncludesCursorSessions() throws {
         try requireLiveTest()
-        let all = SessionSnapshotBuilder.buildSnapshots()
+        let all = SessionSnapshotBuilder.buildSnapshots(includeCursorHistory: true)
         let cursor = all.filter { $0.tool == "Cursor" }
         print("BUILDER_CURSOR_COUNT \(cursor.count) TOTAL \(all.count)")
         XCTAssertGreaterThan(cursor.count, 0, "expected Cursor agent sessions from ~/.cursor/projects")
+    }
+
+    func testLiveOnlyCursorInboxMatchesRunningAgents() throws {
+        try requireLiveTest()
+        let liveCount = LiveAgents.liveSessions().filter { $0.tool == "Cursor" }.count
+        let built = SessionSnapshotBuilder.build(includeCursorHistory: false)
+        let inboxCursor = built.snapshots.filter { $0.tool == "Cursor" }
+        print("LIVE_CURSOR_AGENTS \(liveCount) INBOX_CURSOR \(inboxCursor.count) HIDDEN_HISTORY \(built.hiddenCursorHistoryCount)")
+        XCTAssertEqual(inboxCursor.count, liveCount)
+        for snap in inboxCursor {
+            XCTAssertNotNil(snap.livePid, "inbox Cursor rows should be live")
+        }
+        if liveCount > 0 {
+            XCTAssertGreaterThan(built.hiddenCursorHistoryCount, 0,
+                                 "disk history should be hidden when live agents exist")
+        }
     }
 
     func testStatusDistributionSnapshot() throws {

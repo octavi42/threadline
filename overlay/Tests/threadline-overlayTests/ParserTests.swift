@@ -115,6 +115,12 @@ final class CodexSourceTests: XCTestCase {
 }
 
 final class CursorAgentSourceTests: XCTestCase {
+    func testRejectsHomeDirectoryWorkspace() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertFalse(CursorAgentSource.isTrustedWorkspacePath(home))
+        XCTAssertTrue(CursorAgentSource.isTrustedWorkspacePath("\(home)/Projects/threadline"))
+    }
+
     func testSnapshotFromFixture() throws {
         let path = try fixture("cursor_agent_simple.jsonl")
         guard let snap = CursorAgentSource.snapshot(forJSONL: path) else {
@@ -133,6 +139,25 @@ final class CursorAgentSourceTests: XCTestCase {
         XCTAssertEqual(snap.lastText, "Running tests.")
         XCTAssertEqual(snap.fileChanges.count, 1)
         XCTAssertEqual(snap.fileChanges.first?.edits.first?.tool, "Edit")
+    }
+}
+
+final class SummarizerPolicyTests: XCTestCase {
+    func testCursorSessionsSkipLLMSummary() throws {
+        let path = try fixture("cursor_agent_simple.jsonl")
+        XCTAssertFalse(Summarizer.shouldSummarize(tool: "Cursor", jsonlPath: path))
+    }
+
+    func testDeterministicBriefForCursor() throws {
+        let path = try fixture("cursor_agent_simple.jsonl")
+        guard let snap = CursorAgentSource.snapshot(forJSONL: path) else {
+            XCTFail("expected snapshot")
+            return
+        }
+        let brief = SessionModel.deterministicBrief(for: snap)
+        XCTAssertNotNil(brief)
+        XCTAssertTrue(brief?.contains("logout") == true || brief?.contains("StrReplace") == true
+                  || brief?.contains("auth.swift") == true)
     }
 }
 
