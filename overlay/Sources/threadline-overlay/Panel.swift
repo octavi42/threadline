@@ -149,6 +149,13 @@ final class OverlayController {
         return "jumped to \(result.appName) via \(result.detail)"
     }
 
+    func jumpDebugMessage() -> String {
+        guard let snap = model.selectedSnapshot ?? model.selectedFolder?.latestSnapshot else {
+            return "no jump target"
+        }
+        return JumpBack.debugDescription(for: snap)
+    }
+
     @discardableResult
     private func focusFrontmostTerminalContext() -> String {
         guard let target = WindowFinder.frontmostTarget() else { return "no frontmost target" }

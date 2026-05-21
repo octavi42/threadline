@@ -69,9 +69,8 @@ enum CLI {
         }
         if !sendArgs.isEmpty { payload += " " + sendArgs.joined(separator: " ") }
         IPC.writeLine(fd, payload)
-        // `list` returns multi-line output; everything else is one line. Use
-        // readAll so multi-line replies aren't truncated.
-        if cmd == "list" {
+        // Multi-line daemon replies must use readAll so output isn't truncated.
+        if cmd == "list" || cmd == "jump-debug" || cmd == "focus-debug" {
             if let reply = IPC.readAll(fd) { print(reply) }
         } else if let reply = IPC.readLine(fd) {
             print(reply)

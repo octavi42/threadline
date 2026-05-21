@@ -128,6 +128,8 @@ enum Daemon {
             model?.refresh(); return "ok"
         case "jump":
             return c.jumpToSelectionMessage()
+        case "jump-debug":
+            return c.jumpDebugMessage()
         case "list":
             let folders = model?.folders ?? []
             if folders.isEmpty { return "(no open agents)" }
