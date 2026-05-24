@@ -438,16 +438,9 @@ enum JumpBack {
                 return tty == nil ? (false, "missing-tty") : (true, "tty")
             case "com.mitchellh.ghostty":
                 if surfaceID != nil { return (true, "surface-id") }
-                if pickGhosttySurface(cwd: cwd, titleHint: titleHint, activityHint: activityHint) != nil {
-                    return (true, "ghostty-disambiguated")
-                }
-                if let cwd = cwd, !cwd.isEmpty {
-                    let matches = listGhosttyTerminals().filter {
-                        ($0.cwd as NSString).standardizingPath == (cwd as NSString).standardizingPath
-                    }
-                    if matches.count == 1 { return (true, "unique-cwd") }
-                }
-                return (false, "ambiguous-ghostty")
+                if tty != nil { return (true, "ghostty-tty") }
+                if agentPid != nil { return (true, "ghostty-agent-pid") }
+                return (false, "unverified-ghostty-route")
             default:
                 return (false, "unsupported-terminal")
             }

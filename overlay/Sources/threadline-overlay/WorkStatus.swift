@@ -32,20 +32,6 @@ enum WorkStatusResolver {
         return parts.joined(separator: "\n").lowercased()
     }
 
-    /// User asks + tool output only — never assistant prose (avoids doc/table false positives).
-    static func blockerEvidence(for snap: SourceSnapshot) -> String {
-        var parts: [String] = []
-        if let task = snap.currentTask { parts.append(task) }
-        if let path = snap.jsonlPath,
-           let tail = SessionTranscriptCache.activeUserAndToolEvidence(fromJSONL: path, maxBytes: 96 * 1024) {
-            parts.append(tail)
-        } else {
-            if let text = snap.lastText { parts.append(text) }
-            if let note = snap.note { parts.append(note) }
-        }
-        return parts.joined(separator: "\n").lowercased()
-    }
-
     /// Snapshot-owned text only. Use this for account/quota blockers so a
     /// grep result or pasted transcript from another session does not poison
     /// the current session.
@@ -103,7 +89,7 @@ enum WorkStatusResolver {
     static func resolveLive(_ snap: SourceSnapshot, now: Date = Date()) -> WorkState {
         if snap.state == .running {
             let headline = blockerHeadline(for: snap)
-            if let blocked = blockedReason(in: "", headline: headline) {
+            if let blocked = blockedReason(headline: headline) {
                 return WorkState(status: .needsYou,
                                  reason: blocked,
                                  nextAction: nextActionForBlocker(blocked),
@@ -144,14 +130,13 @@ enum WorkStatusResolver {
 
     static func resolve(_ snap: SourceSnapshot) -> WorkState {
         let text = evidenceText(for: snap)
-        let blockerText = blockerEvidence(for: snap)
         let blockerHeadline = blockerHeadline(for: snap)
         let kind = sessionKind(for: snap, evidence: text)
         let codeChanged = hasCodeChanges(snap)
         let testText = testEvidenceText(for: snap)
         let testsPassed = hasPassedTestSignal(in: testText)
         let testsFailed = hasFailedTestSignal(in: testText)
-        let blocked = blockedReason(in: blockerText, headline: blockerHeadline)
+        let blocked = blockedReason(headline: blockerHeadline)
 
         if let blocked {
             return WorkState(status: .needsYou,
@@ -352,7 +337,7 @@ enum WorkStatusResolver {
         }
     }
 
-    private static func blockedReason(in text: String, headline: String) -> String? {
+    private static func blockedReason(headline: String) -> String? {
         let directHeadline = headline
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.contains("|") }

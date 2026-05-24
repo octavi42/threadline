@@ -6,7 +6,7 @@ import Observation
 final class SnapshotCell {
     let id: String
     private(set) var snapshot: SourceSnapshot
-    /// Bumped on every applied payload so SwiftUI always sees content refreshes.
+    /// Bumped when a changed payload is applied so SwiftUI sees content refreshes.
     private(set) var revision: UInt64 = 0
     /// When this row last received new snapshot data from a refresh.
     private(set) var lastAppliedAt: Date?

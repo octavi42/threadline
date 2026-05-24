@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 /// Generates a short session brief for the Overview tab (goal, progress, files).
 ///

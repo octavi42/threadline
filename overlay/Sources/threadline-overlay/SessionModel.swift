@@ -280,7 +280,7 @@ final class SessionModel {
             )
             maintainSelection(preferredID: preferred)
 
-            if schedulePolling, timer == nil || pollInterval != currentPollInterval {
+            if schedulePolling && (timer == nil || pollInterval != currentPollInterval) {
                 currentPollInterval = pollInterval
                 scheduleTimer(interval: pollInterval)
             } else {
