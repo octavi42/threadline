@@ -75,7 +75,9 @@ enum IPC {
     static func writeLine(_ fd: Int32, _ s: String) {
         let line = s + "\n"
         line.withCString { ptr in
-            _ = Darwin.send(fd, ptr, strlen(ptr), 0)
+            // A CLI can exit after sending a command. Its closed socket should
+            // not terminate the daemon when a reply arrives asynchronously.
+            _ = Darwin.send(fd, ptr, strlen(ptr), MSG_NOSIGNAL)
         }
     }
 

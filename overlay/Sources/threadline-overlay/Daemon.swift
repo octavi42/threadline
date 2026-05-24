@@ -12,6 +12,11 @@ enum Daemon {
     private static let appDelegate = AppDelegate()
 
     static func run() {
+        // IPC clients and LLM subprocesses may close their socket/pipe before
+        // asynchronous replies or prompts are written. Treat EPIPE as an
+        // ordinary failed write instead of terminating the app.
+        _ = Darwin.signal(SIGPIPE, SIG_IGN)
+
         // Exclusive lock — prevents two daemons (launchd + CLI spawn) from both
         // binding the hotkey and opening separate windows.
         guard DaemonLock.acquire() else {
