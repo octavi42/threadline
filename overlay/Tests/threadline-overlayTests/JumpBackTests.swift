@@ -2,6 +2,15 @@ import XCTest
 @testable import threadline_overlay
 
 final class JumpBackTests: XCTestCase {
+    func testCanJumpRejectsPersistedTerminalRouteWithoutRunningApp() {
+        var snap = SourceSnapshot(id: "cached", tool: "Codex", badge: "CDX")
+        snap.terminalBundleID = "com.mitchellh.ghostty"
+        snap.terminalSurfaceID = "surface-id"
+
+        XCTAssertFalse(JumpBack.canJump(to: snap))
+        XCTAssertNil(JumpBack.jump(to: snap, dryRun: true))
+    }
+
     func testResolveRoutePrefersTerminalForCursorAgentWithTTY() throws {
         try requireLiveTest()
         let sessions = LiveAgents.liveSessions().filter { $0.tool == "Cursor" }

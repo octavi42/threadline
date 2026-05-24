@@ -35,7 +35,7 @@ final class OverlayController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Threadline · local 4"
+        panel.title = "Threadline"
         panel.level = .normal
         panel.collectionBehavior = [.fullScreenAuxiliary]
         panel.hidesOnDeactivate = false

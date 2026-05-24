@@ -296,9 +296,9 @@ final class Summarizer {
         do { try proc.run() } catch { return nil }
 
         if let data = stdin.data(using: .utf8) {
-            writeAll(data, toFD: inputPipe.fileHandleForWriting.fileDescriptor)
+            try? inputPipe.fileHandleForWriting.write(contentsOf: data)
         }
-        _ = Darwin.close(inputPipe.fileHandleForWriting.fileDescriptor)
+        try? inputPipe.fileHandleForWriting.close()
 
         // Bound wait — kill if it overruns the timeout.
         let group = DispatchGroup()
@@ -317,20 +317,6 @@ final class Summarizer {
         let text = String(data: stdoutData, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (text?.isEmpty == false) ? text : nil
-    }
-
-    private func writeAll(_ data: Data, toFD fd: Int32) {
-        data.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            var written = 0
-            while written < rawBuffer.count {
-                let result = Darwin.write(fd,
-                                          base.advanced(by: written),
-                                          rawBuffer.count - written)
-                if result <= 0 { return }
-                written += result
-            }
-        }
     }
 
     // MARK: - prompt building

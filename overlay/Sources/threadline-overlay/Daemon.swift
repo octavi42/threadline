@@ -7,6 +7,7 @@ enum Daemon {
     private static var model: SessionModel?
     private static var listenerFD: Int32 = -1
     private static var listenerRunning = false
+    private static let listenerStateLock = NSLock()
     private static var hotKey: HotKey?
     private static let appDelegate = AppDelegate()
 
@@ -45,14 +46,16 @@ enum Daemon {
             FileHandle.standardError.write(Data("failed to bind socket at \(IPC.socketPath)\n".utf8))
             exit(1)
         }
+        listenerStateLock.lock()
         listenerFD = fd
         listenerRunning = true
+        listenerStateLock.unlock()
 
         // Accept loop on a background dispatch queue. Permanent socket
         // failures (EBADF, ENOTSOCK) should be fatal — looping with no delay
         // would pin a CPU and produce no useful work.
         DispatchQueue.global(qos: .utility).async {
-            while listenerRunning {
+            while isListenerRunning() {
                 let client = accept(fd, nil, nil)
                 if client >= 0 {
                     DispatchQueue.global(qos: .userInitiated).async {
@@ -66,7 +69,7 @@ enum Daemon {
                     // Transient — try again after a short pause.
                     usleep(10_000)
                 case EBADF, ENOTSOCK, EINVAL:
-                    if listenerRunning {
+                    if isListenerRunning() {
                         FileHandle.standardError.write(
                             Data("accept failed permanently (errno=\(err)); exiting\n".utf8))
                         exit(1)
@@ -82,11 +85,20 @@ enum Daemon {
         }
     }
 
+    private static func isListenerRunning() -> Bool {
+        listenerStateLock.lock()
+        defer { listenerStateLock.unlock() }
+        return listenerRunning
+    }
+
     private static func stopSocketListener() {
+        listenerStateLock.lock()
         listenerRunning = false
-        guard listenerFD >= 0 else { return }
-        close(listenerFD)
+        let fd = listenerFD
         listenerFD = -1
+        listenerStateLock.unlock()
+        guard fd >= 0 else { return }
+        close(fd)
         IPC.removeSocket()
     }
 

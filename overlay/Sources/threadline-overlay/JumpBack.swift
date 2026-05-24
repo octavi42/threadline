@@ -44,7 +44,7 @@ enum JumpBack {
         let route = resolveRoute(for: snapshot)
         switch route.kind {
         case .terminal:
-            return route.bundleID != nil && hasTerminalRoute(route)
+            return terminalApp(for: route) != nil && hasTerminalRoute(route)
         case .cursorWorkspace:
             if runningCursorApp() != nil { return true }
             guard let cwd = route.cwd, !cwd.isEmpty else { return false }
