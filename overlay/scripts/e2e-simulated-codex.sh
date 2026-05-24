@@ -67,7 +67,10 @@ start_daemon() {
         "$BIN" daemon >"$TMP/daemon.log" 2>&1 &
     DAEMON_PID=$!
     for _ in $(seq 1 100); do
-        if run_cli status >/dev/null 2>&1; then return 0; fi
+        # Do not call the user-facing CLI for readiness: on a clean machine it
+        # may install/spawn a daemon before this isolated test socket is bound.
+        if [[ -S "$SOCKET" ]]; then return 0; fi
+        if ! kill -0 "$DAEMON_PID" 2>/dev/null; then break; fi
         sleep 0.1
     done
     echo "FAIL: isolated daemon did not start" >&2
