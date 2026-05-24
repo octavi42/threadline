@@ -36,11 +36,12 @@ enum LiveAgents {
                 )
             case "codex":
                 if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
-                for path in openJSONLPaths(pid: pid) where path.contains("/.codex/sessions/") {
-                    if !usedPaths.contains(path) {
-                        sessions.append(LiveSession(tool: "Codex", pid: pid, jsonlPath: path))
-                        usedPaths.insert(path)
-                    }
+                let paths = openJSONLPaths(pid: pid)
+                    .filter { $0.contains("/.codex/sessions/") }
+                if let path = preferredCodexJSONLPath(from: paths),
+                   !usedPaths.contains(path) {
+                    sessions.append(LiveSession(tool: "Codex", pid: pid, jsonlPath: path))
+                    usedPaths.insert(path)
                 }
             case "node", "cursor-agent":
                 if isNonInteractiveHelper(pid: pid, comm: comm) { continue }
@@ -87,6 +88,26 @@ enum LiveAgents {
         }
 
         return sessions
+    }
+
+    /// `/clear` may leave the previous Codex rollout fd open on the same PID.
+    /// Only the newest rollout represents the conversation still active in the tab.
+    static func preferredCodexJSONLPath(
+        from paths: [String],
+        createdAt: (String) -> Date? = codexSessionCreationDate
+    ) -> String? {
+        let uniquePaths = Set(paths)
+        let dated = uniquePaths.compactMap { path -> (path: String, date: Date)? in
+            guard let date = createdAt(path) else { return nil }
+            return (path, date)
+        }
+        if let newest = dated.max(by: {
+            if $0.date == $1.date { return $0.path < $1.path }
+            return $0.date < $1.date
+        }) {
+            return newest.path
+        }
+        return uniquePaths.max()
     }
 
     /// The overlay can spawn CLI helpers to summarize sessions. Those helpers
@@ -224,5 +245,10 @@ enum LiveAgents {
             if path.hasSuffix(".jsonl") { out.append(path) }
         }
         return out
+    }
+
+    private static func codexSessionCreationDate(_ path: String) -> Date? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        return attributes?[.creationDate] as? Date
     }
 }

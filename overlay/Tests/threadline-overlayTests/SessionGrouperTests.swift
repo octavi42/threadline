@@ -2,6 +2,38 @@ import XCTest
 @testable import threadline_overlay
 
 final class SessionGrouperTests: XCTestCase {
+    func testCodexClearKeepsOnlyNewestOpenRolloutLive() {
+        let prior = "/Users/test/.codex/sessions/2026/05/25/rollout-prior.jsonl"
+        let current = "/Users/test/.codex/sessions/2026/05/25/rollout-current.jsonl"
+        let dates = [
+            prior: Date(timeIntervalSince1970: 100),
+            current: Date(timeIntervalSince1970: 200),
+        ]
+
+        let selected = LiveAgents.preferredCodexJSONLPath(
+            from: [prior, current, prior],
+            createdAt: { dates[$0] }
+        )
+
+        XCTAssertEqual(selected, current)
+    }
+
+    func testHotRefreshReconcilesReplacementForSameLiveProcess() {
+        var prior = makeSnapshot(id: "prior", cwd: "/proj")
+        prior.livePid = 99
+        var current = makeSnapshot(id: "current", cwd: "/proj")
+        current.livePid = 99
+
+        XCTAssertTrue(SessionModel.containsLiveSessionReplacement(
+            updates: [current],
+            existing: [prior]
+        ))
+        XCTAssertFalse(SessionModel.containsLiveSessionReplacement(
+            updates: [prior],
+            existing: [prior]
+        ))
+    }
+
     func testMergeInboxRowsPreservesOrder() {
         let current: [InboxRow] = [
             .folderHeader(cwd: "/a"),

@@ -220,6 +220,12 @@ final class SessionModel {
     }
 
     private func applyHotUpdates(_ updates: [SourceSnapshot]) {
+        if Self.containsLiveSessionReplacement(updates: updates,
+                                               existing: Array(snapshotByID.values)) {
+            OverlayLog.write("hot refresh detected live session replacement; reconciling")
+            refresh()
+            return
+        }
         var txn = Transaction()
         txn.disablesAnimations = true
         withTransaction(txn) {
@@ -506,6 +512,16 @@ final class SessionModel {
         var next = SourceSnapshot.withStructuralDerivedFields(snap)
         next.workState = WorkStatusResolver.resolveLive(next)
         return next
+    }
+
+    static func containsLiveSessionReplacement(updates: [SourceSnapshot],
+                                               existing: [SourceSnapshot]) -> Bool {
+        updates.contains { update in
+            guard let pid = update.livePid else { return false }
+            return existing.contains {
+                $0.livePid == pid && $0.tool == update.tool && $0.id != update.id
+            }
+        }
     }
 
     private static func statusSummary(_ snapshots: [SourceSnapshot]) -> String {
