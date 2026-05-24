@@ -203,7 +203,7 @@ private struct AgentsList: View {
     }
 }
 
-/// One flat sidebar row — constant view count per `InboxRow` for stable List identity.
+/// One flat sidebar row with stable identity for incremental refreshes.
 private struct InboxRowView: View {
     let row: InboxRow
     @Bindable var model: SessionModel
@@ -211,19 +211,22 @@ private struct InboxRowView: View {
     private var isSelected: Bool { model.selectedID == row.selectionTag }
 
     var body: some View {
-        Group {
-            switch row {
-            case .folderHeader(let cwd):
-                FolderSidebarRow(cwd: cwd, model: model)
-            case .agent(let snapshotID, _, let isFirst, let isLast):
-                if let cell = model.cell(for: snapshotID) {
+        switch row {
+        case .folderHeader(let cwd):
+            FolderSidebarRow(cwd: cwd, isSelected: isSelected, model: model)
+        case .agent(let snapshotID, _, let isFirst, let isLast):
+            if let cell = model.cell(for: snapshotID) {
+                Button {
+                    model.selectedID = row.selectionTag
+                } label: {
                     AgentInboxRow(cell: cell, isFirst: isFirst, isLast: isLast)
                 }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
-        .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
-        .contentShape(Rectangle())
-        .onTapGesture { model.selectedID = row.selectionTag }
     }
 }
 
@@ -264,10 +267,10 @@ private struct RelativeTimeText: View {
     }
 }
 
-/// Folder row with an explicit chevron — `DisclosureGroup` inside a selectable
-/// `List` does not reliably expand/collapse on macOS.
+/// Folder row with separate keyboard-accessible selection and disclosure controls.
 private struct FolderSidebarRow: View {
     let cwd: String
+    let isSelected: Bool
     @Bindable var model: SessionModel
 
     private var folder: SessionFolder? { model.inboxFolder(cwd: cwd) }
@@ -287,12 +290,17 @@ private struct FolderSidebarRow: View {
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse sessions" : "Expand sessions")
 
-                FolderHeader(folder: folder)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        model.selectedID = folder.selectionID
-                    }
+                Button {
+                    model.selectedID = folder.selectionID
+                } label: {
+                    FolderHeader(folder: folder)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityHint("Select folder sessions")
             }
+            .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
             .padding(.leading, 4)
             .padding(.top, 2)
             .padding(.bottom, isExpanded ? 4 : 2)

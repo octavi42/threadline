@@ -1,4 +1,5 @@
 import Foundation
+import CoreServices
 
 /// Watches agent JSONL roots and triggers a hot reload when transcripts change.
 final class SessionLogWatcher {
