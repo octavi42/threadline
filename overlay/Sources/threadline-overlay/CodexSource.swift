@@ -7,6 +7,7 @@ enum CodexSource {
         var lastAssistant: String?
         var lastUser: String?
         var lastTokenUsage: (input: Int, cached: Int, output: Int)?
+        var sawTaskLifecycle = false
         var sawStartedAfterComplete = false
         var userTurns = 0
         var assistantTurns = 0
@@ -96,10 +97,13 @@ enum CodexSource {
         snap.lastText = parsed.lastAssistant ?? parsed.lastUser
 
         let ageSec = -mtime.timeIntervalSinceNow
-        if parsed.sawStartedAfterComplete && ageSec < 30 { snap.state = .running }
-        else if ageSec < 5                          { snap.state = .running }
-        else if ageSec > 300                        { snap.state = .stale }
-        else                                        { snap.state = .idle }
+        if parsed.sawTaskLifecycle {
+            if parsed.sawStartedAfterComplete { snap.state = .running }
+            else if ageSec > 300              { snap.state = .stale }
+            else                              { snap.state = .idle }
+        } else if ageSec < 5                  { snap.state = .running }
+        else if ageSec > 300                  { snap.state = .stale }
+        else                                  { snap.state = .idle }
 
         if let u = parsed.lastTokenUsage, let limit = parsed.contextLimit, limit > 0 {
             snap.contextPercent = min(1.0, Double(u.input + u.cached) / Double(limit))
@@ -163,8 +167,14 @@ enum CodexSource {
                 if let limit = payload["model_context_window"] as? Int { out.contextLimit = limit }
             case "event_msg":
                 let etype = payload["type"] as? String
-                if etype == "task_started"  { out.sawStartedAfterComplete = true }
-                if etype == "task_complete" { out.sawStartedAfterComplete = false }
+                if etype == "task_started" {
+                    out.sawTaskLifecycle = true
+                    out.sawStartedAfterComplete = true
+                }
+                if etype == "task_complete" {
+                    out.sawTaskLifecycle = true
+                    out.sawStartedAfterComplete = false
+                }
                 if etype == "agent_message", let m = payload["message"] as? String, !m.isEmpty {
                     out.lastAssistant = m
                 }

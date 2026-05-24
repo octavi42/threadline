@@ -24,3 +24,6 @@ jobs:
 
       - name: Test
         run: swift test
+
+      - name: Simulated realtime capture E2E
+        run: ./scripts/e2e-simulated-codex.sh

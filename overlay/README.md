@@ -148,6 +148,39 @@ Configure via environment or `~/.threadline/config.json`:
 | `THREADLINE_OLLAMA_MODEL` / `ollama_model` | `qwen2.5:3b` |
 | `THREADLINE_DISABLE_OLLAMA=1` | skip local AI |
 
+## Testing
+
+Run the parser and status test suite:
+
+```bash
+swift test
+```
+
+Run a deterministic black-box realtime capture test:
+
+```bash
+./scripts/e2e-simulated-codex.sh
+```
+
+The simulated test starts an isolated Threadline daemon and a temporary
+process named `codex` that keeps a rollout JSONL open, exactly as the live
+Codex discovery path expects. It asserts capture while running, a transcript
+update, removal after process exit, and that restarting the daemon does not
+restore stale live identity. The harness sets `THREADLINE_LIVE_ONLY=1` so it
+does not scan or assert against unrelated historical sessions on the machine.
+
+For local-session diagnostics, run:
+
+```bash
+THREADLINE_LIVE_TEST=1 swift test --filter LiveConsistencyTests
+./scripts/e2e-live.sh
+```
+
+The SwiftUI rows expose `session-row-*`, `session-status-*`,
+`session-live-*`, and `threadline-sync-indicator` accessibility identifiers
+for an XCUITest UI smoke target once the executable is packaged as an app test
+host.
+
 ## Roadmap
 
 - Parse in-IDE Composer chats from `workspaceStorage` / `cursorDiskKV` (CLI agent is supported).

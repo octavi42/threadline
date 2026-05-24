@@ -50,7 +50,7 @@ enum CLI {
                 FileHandle.standardError.write(Data("could not start daemon\n".utf8))
                 exit(1)
             }
-            for _ in 0..<60 {       // up to ~3s
+            for _ in 0..<120 {      // up to ~6s (launchd may throttle restarts)
                 usleep(50_000)
                 fd = IPC.connect()
                 if fd >= 0 { break }
@@ -78,9 +78,14 @@ enum CLI {
     }
 
     private static func spawnDaemon() -> Bool {
-        if LaunchAgent.isInstalled {
-            return kickstartLaunchAgent()
+        cleanupStaleDaemonArtifacts()
+        if LaunchAgent.isInstalled, kickstartLaunchAgent() {
+            return true
         }
+        return spawnDetachedDaemon()
+    }
+
+    private static func spawnDetachedDaemon() -> Bool {
         guard let fullPath = Bundle.main.executablePath else {
             FileHandle.standardError.write(Data("could not resolve executable path\n".utf8))
             return false
@@ -114,5 +119,14 @@ enum CLI {
         } catch {
             return false
         }
+    }
+
+    /// Drop stale lock/socket left by a crashed or recently quit daemon.
+    private static func cleanupStaleDaemonArtifacts() {
+        if let pid = DaemonLock.holderPID(), pid > 0, kill(pid, 0) == 0 {
+            return
+        }
+        try? FileManager.default.removeItem(atPath: DaemonLock.lockPath)
+        try? FileManager.default.removeItem(atPath: IPC.socketPath)
     }
 }

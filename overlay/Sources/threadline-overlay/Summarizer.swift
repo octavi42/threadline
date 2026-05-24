@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Generates a short session brief for the Overview tab (goal, progress, files).
 ///
@@ -277,7 +278,7 @@ final class Summarizer {
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         p.waitUntilExit()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+        let out = String(data: (try? pipe.fileHandleForReading.readToEnd()) ?? Data(),
                          encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (out?.isEmpty == false && FileManager.default.isExecutableFile(atPath: out!)) ? out : nil
     }
@@ -295,16 +296,16 @@ final class Summarizer {
         do { try proc.run() } catch { return nil }
 
         if let data = stdin.data(using: .utf8) {
-            try? inputPipe.fileHandleForWriting.write(contentsOf: data)
+            writeAll(data, toFD: inputPipe.fileHandleForWriting.fileDescriptor)
         }
-        try? inputPipe.fileHandleForWriting.close()
+        _ = Darwin.close(inputPipe.fileHandleForWriting.fileDescriptor)
 
         // Bound wait — kill if it overruns the timeout.
         let group = DispatchGroup()
         group.enter()
         var stdoutData = Data()
         DispatchQueue.global(qos: .utility).async {
-            stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            stdoutData = (try? outputPipe.fileHandleForReading.readToEnd()) ?? Data()
             group.leave()
         }
         if group.wait(timeout: .now() + timeout) == .timedOut {
@@ -316,6 +317,20 @@ final class Summarizer {
         let text = String(data: stdoutData, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (text?.isEmpty == false) ? text : nil
+    }
+
+    private func writeAll(_ data: Data, toFD fd: Int32) {
+        data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var written = 0
+            while written < rawBuffer.count {
+                let result = Darwin.write(fd,
+                                          base.advanced(by: written),
+                                          rawBuffer.count - written)
+                if result <= 0 { return }
+                written += result
+            }
+        }
     }
 
     // MARK: - prompt building

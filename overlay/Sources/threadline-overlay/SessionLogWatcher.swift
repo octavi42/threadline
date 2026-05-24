@@ -1,13 +1,14 @@
 import Foundation
 
-/// Watches agent JSONL roots and triggers a refresh when transcripts change.
+/// Watches agent JSONL roots and triggers a hot reload when transcripts change.
 final class SessionLogWatcher {
     private var stream: FSEventStreamRef?
-    private let queue = DispatchQueue(label: "threadline.overlay.fsevents", qos: .utility)
+    private let queue = DispatchQueue(label: "threadline.overlay.fsevents", qos: .userInitiated)
     private var debounce: DispatchWorkItem?
-    private let onChange: () -> Void
+    private var pendingPaths: Set<String> = []
+    private let onChange: ([String]) -> Void
 
-    init(onChange: @escaping () -> Void) {
+    init(onChange: @escaping ([String]) -> Void) {
         self.onChange = onChange
     }
 
@@ -42,15 +43,23 @@ final class SessionLogWatcher {
 
         guard let stream = FSEventStreamCreate(
             nil,
-            { _, info, _, _, _, _ in
-                guard let info = info else { return }
+            { _, info, numEvents, eventPaths, _, _ in
+                guard let info = info, numEvents > 0 else { return }
                 let watcher = Unmanaged<SessionLogWatcher>.fromOpaque(info).takeUnretainedValue()
-                watcher.scheduleRefresh()
+                let cfArray = unsafeBitCast(eventPaths, to: CFArray.self)
+                var paths: [String] = []
+                paths.reserveCapacity(numEvents)
+                for index in 0..<numEvents {
+                    let value = CFArrayGetValueAtIndex(cfArray, index)
+                    let path = Unmanaged<CFString>.fromOpaque(value!).takeUnretainedValue() as String
+                    paths.append(path)
+                }
+                watcher.scheduleRefresh(paths: paths)
             },
             &context,
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.2,
+            0.05,
             flags
         ) else { return }
 
@@ -62,6 +71,7 @@ final class SessionLogWatcher {
     func stop() {
         debounce?.cancel()
         debounce = nil
+        pendingPaths.removeAll()
         if let stream = stream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
@@ -70,12 +80,17 @@ final class SessionLogWatcher {
         }
     }
 
-    private func scheduleRefresh() {
+    private func scheduleRefresh(paths: [String]) {
+        guard !paths.isEmpty else { return }
+        pendingPaths.formUnion(paths)
         debounce?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.onChange()
+            guard let self = self else { return }
+            let batch = self.pendingPaths
+            self.pendingPaths.removeAll()
+            self.onChange(Array(batch))
         }
         debounce = work
-        queue.asyncAfter(deadline: .now() + 0.25, execute: work)
+        queue.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 }

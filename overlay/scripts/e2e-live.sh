@@ -52,7 +52,7 @@ import json, subprocess, sys
 
 d = json.load(open(sys.argv[1]))
 snapshots = d.get("snapshots", [])
-inbox_cursor = sum(1 for s in snapshots if s.get("tool") == "Cursor")
+cursor_rows = sum(1 for s in snapshots if s.get("tool") == "Cursor")
 cursor_live = sum(1 for s in snapshots if s.get("tool") == "Cursor" and "livePid" in s)
 live_resolvable = d.get("liveCursorAgentCount", 0)
 hidden = d.get("hiddenCursorHistoryCount", 0)
@@ -72,7 +72,7 @@ def sh(v):
 
 for k, v in [
     ("LIVE_PROCS", pgrep),
-    ("INBOX_CURSOR", inbox_cursor),
+    ("CURSOR_ROWS", cursor_rows),
     ("CURSOR_LIVE_ROWS", cursor_live),
     ("LIVE_RESOLVABLE", live_resolvable),
     ("HIDDEN", hidden),
@@ -90,7 +90,7 @@ echo "cursor-agent processes (pgrep):     $LIVE_PROCS"
 echo "resolvable live agents (daemon):    $LIVE_RESOLVABLE"
 echo "unmatched pgrep (no trusted ws):   $UNMATCHED"
 echo "daemon agentCount:                  $AGENTS"
-echo "Cursor rows in snapshots:           $INBOX_CURSOR"
+echo "retained Cursor rows in snapshots:  $CURSOR_ROWS"
 echo "Cursor rows with livePid:           $CURSOR_LIVE_ROWS"
 echo "hiddenCursorHistoryCount:           $HIDDEN"
 echo "showCursorHistorySessions:          $SHOW_HIST"
@@ -104,18 +104,13 @@ if [[ "$SHOW_HIST" != "False" ]]; then
   FAIL=1
 fi
 
-if [[ "$INBOX_CURSOR" != "$LIVE_RESOLVABLE" ]]; then
-  echo "FAIL: inbox Cursor ($INBOX_CURSOR) != resolvable live agents ($LIVE_RESOLVABLE)"
+if [[ "$CURSOR_LIVE_ROWS" != "$LIVE_RESOLVABLE" ]]; then
+  echo "FAIL: live Cursor rows ($CURSOR_LIVE_ROWS) != resolvable live agents ($LIVE_RESOLVABLE)"
   FAIL=1
 fi
 
-if [[ "$CURSOR_LIVE_ROWS" != "$INBOX_CURSOR" ]]; then
-  echo "FAIL: not every Cursor row has livePid ($CURSOR_LIVE_ROWS / $INBOX_CURSOR)"
-  FAIL=1
-fi
-
-if [[ "$INBOX_CURSOR" -gt "$LIVE_PROCS" ]]; then
-  echo "FAIL: inbox shows more Cursor rows than running processes"
+if [[ "$CURSOR_LIVE_ROWS" -gt "$LIVE_PROCS" ]]; then
+  echo "FAIL: live rows exceed running Cursor processes"
   FAIL=1
 fi
 
@@ -124,7 +119,7 @@ if [[ "$LIVE_RESOLVABLE" -gt 0 && "$HIDDEN" -eq 0 ]]; then
 fi
 
 if [[ "$FAIL" -eq 0 ]]; then
-  echo "PASS: live-only Cursor inbox matches resolvable running agents"
+  echo "PASS: live Cursor rows match resolvable running agents"
   exit 0
 fi
 

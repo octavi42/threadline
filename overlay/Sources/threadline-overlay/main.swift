@@ -1,7 +1,7 @@
 import Foundation
 
 let args = Array(CommandLine.arguments.dropFirst())
-let cmd = args.first ?? "help"
+let cmd = args.first ?? "show"
 let rest = Array(args.dropFirst())
 
 switch cmd {
