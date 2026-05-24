@@ -1,13 +1,13 @@
 import Foundation
 
 let args = Array(CommandLine.arguments.dropFirst())
-let cmd = args.first ?? "help"
+let cmd = args.first ?? "show"
 let rest = Array(args.dropFirst())
 
 switch cmd {
 case "daemon":
     Daemon.run()
-case "toggle", "show", "hide", "quit", "status", "refresh", "list", "snapshots", "jump", "focus", "focus-debug":
+case "toggle", "show", "hide", "quit", "status", "refresh", "list", "snapshots", "jump", "jump-debug", "focus", "focus-debug":
     CLI.send(cmd, args: rest)
 case "touch":
     CLI.touch(args: rest)
@@ -38,6 +38,7 @@ func printUsage() {
       focus        select the frontmost terminal's project, or --cwd PATH
       focus-debug  print focused-terminal matching diagnostics
       jump         focus the selected agent's terminal/editor
+      jump-debug   print jump route resolution for the selected agent
       status       print daemon pid, window frame, and agent count
       snapshots    dump session rows (--json for E2E automation)
       touch        register a shell's cwd with the daemon

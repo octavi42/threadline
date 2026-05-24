@@ -41,6 +41,13 @@ enum ProcTable {
         }
     }
 
+    static func commName(forPID pid: pid_t) -> String? {
+        for info in all() where info.kp_proc.p_pid == pid {
+            return commName(info)
+        }
+        return nil
+    }
+
     /// `parent -> [(childPid, comm)]` index, built from `all()`.
     static func childIndex() -> [pid_t: [(pid_t, String)]] {
         var idx: [pid_t: [(pid_t, String)]] = [:]

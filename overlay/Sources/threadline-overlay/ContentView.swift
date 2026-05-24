@@ -36,7 +36,7 @@ private func workStatusColor(_ status: WorkStatus) -> Color {
 }
 
 struct ContentView: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let onJump: (SourceSnapshot) -> Void
     @State private var tab: DetailTab = .overview
 
@@ -48,7 +48,7 @@ struct ContentView: View {
                 .frame(minWidth: 360)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: model.selectedID) { _ in
+        .onChange(of: model.selectedID) {
             model.requestSummaryForSelection()
         }
     }
@@ -87,22 +87,34 @@ private struct JumpButton: View {
     }
 }
 
+/// Ticks every second — green when data synced within the last 3s.
+private struct SyncIndicator: View {
+    let refreshedAt: Date?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if let refreshedAt {
+                let age = Int(context.date.timeIntervalSince(refreshedAt))
+                let fresh = age < 3
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(fresh
+                              ? Color(red: 0.35, green: 0.85, blue: 0.45)
+                              : Color.secondary.opacity(0.45))
+                        .frame(width: 5, height: 5)
+                    Text(age == 0 ? "live sync" : "sync \(age)s")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(fresh ? Color(red: 0.35, green: 0.75, blue: 0.45) : .secondary)
+                }
+                .help("Last inbox refresh \(age)s ago")
+                .accessibilityIdentifier("threadline-sync-indicator")
+            }
+        }
+    }
+}
+
 private struct AgentsList: View {
-    @ObservedObject var model: SessionModel
-
-    private var inboxFolders: [SessionFolder] { model.inboxFolders }
-    private var hiddenDoneCount: Int {
-        model.snapshots.filter {
-            WorkStatusResolver.isInactiveInbox(model.workState(for: $0))
-        }.count
-    }
-
-    private var hiddenOlderCount: Int {
-        model.snapshots.filter { snap in
-            !WorkStatusResolver.isRecentForInbox(snap)
-                && !WorkStatusResolver.isInactiveInbox(model.workState(for: snap))
-        }.count
-    }
+    @Bindable var model: SessionModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -111,16 +123,16 @@ private struct AgentsList: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
-                if hiddenOlderCount > 0 {
-                    Button(model.showOlderSessions ? "Hide older" : "Show \(hiddenOlderCount) older") {
+                if model.hiddenOlderCount > 0 {
+                    Button(model.showOlderSessions ? "Hide older" : "Show \(model.hiddenOlderCount) older") {
                         model.setShowOlderSessions(!model.showOlderSessions)
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
                 }
-                if hiddenDoneCount > 0 {
-                    Button(model.showInactiveSessions ? "Hide done" : "Show \(hiddenDoneCount) done") {
+                if model.hiddenDoneCount > 0 {
+                    Button(model.showInactiveSessions ? "Hide done" : "Show \(model.hiddenDoneCount) done") {
                         model.setShowInactiveSessions(!model.showInactiveSessions)
                     }
                     .buttonStyle(.plain)
@@ -135,110 +147,169 @@ private struct AgentsList: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
                 }
-                Text("\(inboxFolders.count)/\(model.inboxSnapshotCount)")
+                Text("\(model.inboxFolderCount)/\(model.inboxSnapshotCount)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
+                SyncIndicator(refreshedAt: model.lastRefreshAt)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             Divider()
-            if model.snapshots.isEmpty {
-                VStack(spacing: 6) {
-                    Spacer()
-                    Text("no open agents")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            } else if inboxFolders.isEmpty {
-                VStack(spacing: 6) {
-                    Spacer()
-                    Text("all sessions quiet")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
-                    if hiddenOlderCount > 0 || hiddenDoneCount > 0 {
-                        HStack(spacing: 10) {
-                            if hiddenOlderCount > 0 {
-                                Button("Show \(hiddenOlderCount) older") {
-                                    model.setShowOlderSessions(true)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            if hiddenDoneCount > 0 {
-                                Button("Show \(hiddenDoneCount) done") {
-                                    model.setShowInactiveSessions(true)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if model.inboxRows.isEmpty {
+                        inboxEmptyState
+                            .frame(maxWidth: .infinity, minHeight: 160)
                     }
-                    Spacer()
+                    ForEach(model.inboxRows) { row in
+                        InboxRowView(row: row, model: model)
+                    }
                 }
-                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var inboxEmptyState: some View {
+        VStack(spacing: 6) {
+            if !model.hasAnySnapshots {
+                Text("no open agents")
             } else {
-                List(selection: Binding(
-                    get: { model.selectedID },
-                    set: { model.selectedID = $0 })) {
-                        ForEach(inboxFolders) { folder in
-                            FolderSidebarRow(folder: folder, model: model)
-                                .tag(folder.selectionID)
-                            if model.isFolderExpanded(folder.id) {
-                                ForEach(Array(folder.snapshots.enumerated()), id: \.element.id) { index, snap in
-                                    AgentRow(snap: snap,
-                                             workState: model.workState(for: snap))
-                                        .padding(.leading, 12)
-                                        .padding(.top, index == 0 ? 6 : 2)
-                                        .padding(.bottom, index == folder.snapshots.count - 1 ? 10 : 0)
-                                        .tag(snap.id)
-                                }
+                Text("all sessions quiet")
+                if model.hiddenOlderCount > 0 || model.hiddenDoneCount > 0 {
+                    HStack(spacing: 10) {
+                        if model.hiddenOlderCount > 0 {
+                            Button("Show \(model.hiddenOlderCount) older") {
+                                model.setShowOlderSessions(true)
                             }
+                            .buttonStyle(.plain)
                         }
+                        if model.hiddenDoneCount > 0 {
+                            Button("Show \(model.hiddenDoneCount) done") {
+                                model.setShowInactiveSessions(true)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
-                .listStyle(.sidebar)
+            }
+        }
+        .font(.system(size: 11, design: .monospaced))
+        .foregroundColor(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+    }
+}
+
+/// One flat sidebar row with stable identity for incremental refreshes.
+private struct InboxRowView: View {
+    let row: InboxRow
+    @Bindable var model: SessionModel
+
+    private var isSelected: Bool { model.selectedID == row.selectionTag }
+
+    var body: some View {
+        switch row {
+        case .folderHeader(let cwd):
+            FolderSidebarRow(cwd: cwd, isSelected: isSelected, model: model)
+        case .agent(let snapshotID, _, let isFirst, let isLast):
+            if let cell = model.cell(for: snapshotID) {
+                Button {
+                    model.selectedID = row.selectionTag
+                } label: {
+                    AgentInboxRow(cell: cell, isFirst: isFirst, isLast: isLast)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
     }
 }
 
-/// Folder row with an explicit chevron — `DisclosureGroup` inside a selectable
-/// `List` does not reliably expand/collapse on macOS.
-private struct FolderSidebarRow: View {
-    let folder: SessionFolder
-    @ObservedObject var model: SessionModel
-
-    private var isExpanded: Bool { model.isFolderExpanded(folder.id) }
+private struct AgentInboxRow: View {
+    @Bindable var cell: SnapshotCell
+    let isFirst: Bool
+    let isLast: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 4) {
-            Button {
-                model.toggleFolderExpansion(folder.id)
-            } label: {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .frame(width: 14, height: 14)
-            }
-            .buttonStyle(.plain)
-            .help(isExpanded ? "Collapse sessions" : "Expand sessions")
+        let _ = cell.revision
+        let snap = cell.snapshot
+        AgentRow(snap: snap,
+                 workState: snap.workState,
+                 lastAppliedAt: cell.lastAppliedAt)
+            .padding(.leading, 12)
+            .padding(.top, isFirst ? 6 : 2)
+            .padding(.bottom, isLast ? 10 : 0)
+    }
+}
 
-            FolderHeader(folder: folder, model: model)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    model.selectedID = folder.selectionID
-                }
+/// Ticks relative timestamps without invalidating the whole app model.
+private struct RelativeTimeText: View {
+    let updatedAt: Date?
+    var font: Font = .system(size: 10, design: .monospaced)
+
+    var body: some View {
+        if let updatedAt {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(SourceSnapshot.formatTimeAgo(from: updatedAt, relativeTo: context.date))
+                    .font(font)
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            Text("—")
+                .font(font)
+                .foregroundColor(.secondary)
         }
-        .padding(.leading, 4)
-        .padding(.top, 2)
-        .padding(.bottom, isExpanded ? 4 : 2)
+    }
+}
+
+/// Folder row with separate keyboard-accessible selection and disclosure controls.
+private struct FolderSidebarRow: View {
+    let cwd: String
+    let isSelected: Bool
+    @Bindable var model: SessionModel
+
+    private var folder: SessionFolder? { model.inboxFolder(cwd: cwd) }
+    private var isExpanded: Bool { model.isFolderExpanded(cwd) }
+
+    var body: some View {
+        if let folder = folder {
+            HStack(alignment: .top, spacing: 4) {
+                Button {
+                    model.toggleFolderExpansion(cwd)
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(.plain)
+                .help(isExpanded ? "Collapse sessions" : "Expand sessions")
+
+                Button {
+                    model.selectedID = folder.selectionID
+                } label: {
+                    FolderHeader(folder: folder)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityHint("Select folder sessions")
+            }
+            .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+            .padding(.leading, 4)
+            .padding(.top, 2)
+            .padding(.bottom, isExpanded ? 4 : 2)
+        }
     }
 }
 
 private struct FolderHeader: View {
     let folder: SessionFolder
-    @ObservedObject var model: SessionModel
 
     private var trust: FolderTrustSummary {
         folder.trustSummary(workStates: [:])
@@ -286,9 +357,37 @@ private func inboxNextAction(_ work: WorkState) -> String? {
     return action
 }
 
+/// Flashes green for 2s after a row receives fresh snapshot data.
+private struct RowFreshnessBadge: View {
+    let appliedAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let age = Int(context.date.timeIntervalSince(appliedAt))
+            let fresh = age < 2
+            Text(fresh ? "just updated" : "upd \(age)s")
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .foregroundColor(fresh
+                                 ? Color(red: 0.35, green: 0.85, blue: 0.45)
+                                 : .secondary)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill((fresh
+                               ? Color(red: 0.35, green: 0.85, blue: 0.45)
+                               : Color.secondary).opacity(fresh ? 0.15 : 0.08))
+                )
+                .help("Row data refreshed \(age)s ago")
+        }
+    }
+}
+
 private struct AgentRow: View {
     let snap: SourceSnapshot
     let workState: WorkState?
+    var lastAppliedAt: Date?
+
     var body: some View {
         let work = workState ?? snap.workState
         HStack(alignment: .top, spacing: 6) {
@@ -300,6 +399,7 @@ private struct AgentRow: View {
                             .fill(Color(red: 0.35, green: 0.85, blue: 0.45))
                             .frame(width: 6, height: 6)
                             .help("Live agent process")
+                            .accessibilityIdentifier("session-live-\(snap.id)")
                     }
                     Text(snap.tool)
                         .font(.system(size: 12, weight: .semibold))
@@ -308,6 +408,17 @@ private struct AgentRow: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(workStatusColor(work.status))
                         .lineLimit(1)
+                        .accessibilityIdentifier("session-status-\(snap.id)")
+                    if snap.livePid != nil, let lastAppliedAt {
+                        RowFreshnessBadge(appliedAt: lastAppliedAt)
+                    }
+                }
+                if snap.activityLine != "—" {
+                    Text(snap.activityLine)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .help(snap.activityLine)
                 }
                 if let action = inboxNextAction(work) {
                     Text("→ \(action)")
@@ -317,57 +428,60 @@ private struct AgentRow: View {
                 }
             }
             Spacer(minLength: 4)
-            Text(snap.timeAgoShort)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.secondary)
+            RelativeTimeText(updatedAt: snap.updatedAt)
                 .padding(.top, 2)
         }
         .padding(.vertical, 4)
+        .accessibilityIdentifier("session-row-\(snap.id)")
     }
 }
 
 // MARK: - details pane with tabs
 
 private struct DetailsPane: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     @Binding var tab: DetailTab
     let onJump: (SourceSnapshot) -> Void
 
     var body: some View {
-        if let snap = model.selectedSnapshot {
-            VStack(alignment: .leading, spacing: 0) {
-                DetailHeader(snap: snap, onJump: onJump)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 18)
-                    .padding(.bottom, 10)
-                Picker("", selection: $tab) {
-                    ForEach(DetailTab.allCases) { t in
-                        Text(t.rawValue).tag(t)
-                    }
+        Group {
+            if let selectedID = model.selectedID, selectedID.hasPrefix("folder:") {
+                FolderDetailsPane(model: model, folderCWD: String(selectedID.dropFirst("folder:".count)))
+            } else if let selectedID = model.selectedID {
+                AgentDetailsPane(model: model,
+                                 snapshotID: selectedID,
+                                 tab: $tab,
+                                 onJump: onJump)
+            } else {
+                VStack {
+                    Spacer()
+                    Text("select an agent")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Spacer()
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                Divider().padding(.top, 8)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        switch tab {
-                        case .overview: OverviewView(model: model,
-                                                     snap: snap,
-                                                     workState: model.workState(for: snap))
-                        case .tasks:    TasksView(snap: snap)
-                        case .files:    FilesView(model: model, snap: snap)
-                        }
-                    }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if let folder = model.selectedFolder {
-            FolderDetailsPane(model: model, folder: folder)
+        }
+    }
+}
+
+private struct AgentDetailsPane: View {
+    @Bindable var model: SessionModel
+    let snapshotID: String
+    @Binding var tab: DetailTab
+    let onJump: (SourceSnapshot) -> Void
+
+    var body: some View {
+        if let cell = model.cell(for: snapshotID) {
+            AgentDetailsContent(model: model,
+                                cell: cell,
+                                tab: $tab,
+                                onJump: onJump)
         } else {
             VStack {
                 Spacer()
-                Text("select an agent")
+                Text("session ended")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
@@ -377,11 +491,84 @@ private struct DetailsPane: View {
     }
 }
 
-private struct FolderDetailsPane: View {
-    @ObservedObject var model: SessionModel
-    let folder: SessionFolder
+private struct AgentDetailsContent: View {
+    @Bindable var model: SessionModel
+    @Bindable var cell: SnapshotCell
+    @Binding var tab: DetailTab
+    let onJump: (SourceSnapshot) -> Void
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DetailHeader(snap: cell.snapshot, onJump: onJump)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+            Picker("", selection: $tab) {
+                ForEach(DetailTab.allCases) { t in
+                    Text(t.rawValue).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 20)
+            Divider().padding(.top, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    switch tab {
+                    case .overview:
+                        OverviewView(model: model, cell: cell)
+                    case .tasks:
+                        LiveTasksView(cell: cell)
+                    case .files:
+                        LiveFilesView(model: model, cell: cell)
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+private struct LiveTasksView: View {
+    @Bindable var cell: SnapshotCell
+
+    var body: some View {
+        TasksView(snap: cell.snapshot)
+    }
+}
+
+private struct LiveFilesView: View {
+    @Bindable var model: SessionModel
+    @Bindable var cell: SnapshotCell
+
+    var body: some View {
+        FilesView(model: model, snap: cell.snapshot)
+    }
+}
+
+private struct FolderDetailsPane: View {
+    @Bindable var model: SessionModel
+    let folderCWD: String
+
+    private var folder: SessionFolder? { model.inboxFolder(cwd: folderCWD) ?? model.folders.first { $0.cwd == folderCWD } }
+
+    var body: some View {
+        if let folder = folder {
+            folderDetails(folder)
+        } else {
+            VStack {
+                Spacer()
+                Text("folder unavailable")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func folderDetails(_ folder: SessionFolder) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             FolderDetailHeader(folder: folder)
                 .padding(.horizontal, 20)
@@ -426,7 +613,7 @@ private struct FolderDetailHeader: View {
 }
 
 private struct FolderConflictStripView: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let folder: SessionFolder
 
     private var conflicts: [FileAgentConflict] {
@@ -455,7 +642,7 @@ private struct FolderConflictStripView: View {
 
 private struct FileConflictCard: View {
     let conflict: FileAgentConflict
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
 
     var body: some View {
         Button {
@@ -509,7 +696,7 @@ private struct FileConflictCard: View {
 }
 
 private struct FolderTrustBoardView: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let folder: SessionFolder
 
     var body: some View {
@@ -573,7 +760,7 @@ private struct FolderTasksView: View {
 }
 
 private struct FolderFilesView: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let folder: SessionFolder
     @State private var showAllFiles = false
 
@@ -644,7 +831,7 @@ private struct FolderFilesSummaryBar: View {
 private struct FolderProjectFileRow: View {
     let file: FolderMergedFile
     let folder: SessionFolder
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
 
     private var isExpanded: Bool { model.expandedFiles.contains(file.path) }
 
@@ -718,7 +905,7 @@ private struct FolderProjectFileRow: View {
 private struct FolderProjectFileExpanded: View {
     let file: FolderMergedFile
     let folder: SessionFolder
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let maxEdits: Int
 
     private var visibleEdits: [MergedFileEdit] {
@@ -798,9 +985,7 @@ private struct DetailHeader: View {
                 Spacer()
                 JumpButton(snap: snap, onJump: onJump)
                     .layoutPriority(1)
-                Text(snap.timeAgoShort)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.secondary)
+                RelativeTimeText(updatedAt: snap.updatedAt, font: .system(size: 11, design: .monospaced))
             }
             Text(snap.displayCwd)
                 .font(.system(size: 11, design: .monospaced))
@@ -812,21 +997,21 @@ private struct DetailHeader: View {
 // MARK: - tabs
 
 private struct OverviewView: View {
-    @ObservedObject var model: SessionModel
-    let snap: SourceSnapshot
-    let workState: WorkState
+    @Bindable var model: SessionModel
+    @Bindable var cell: SnapshotCell
 
     var body: some View {
-        let work = workState
+        let snap = cell.snapshot
         VStack(alignment: .leading, spacing: 18) {
-            WorkSummaryView(snap: snap, work: work)
+            WorkSummaryView(snap: snap, work: snap.workState)
             SessionBriefSection(model: model, snap: snap)
-            statsGrid
+            statsGrid(for: snap)
             Spacer(minLength: 0)
         }
         .onAppear { model.requestSummaryForSelection() }
     }
-    private var statsGrid: some View {
+
+    private func statsGrid(for snap: SourceSnapshot) -> some View {
         let branchStr: String? = {
             guard let b = snap.branch else { return nil }
             if let d = snap.dirtyCount, d > 0 { return "\(b)+\(d)" }
@@ -885,7 +1070,7 @@ private struct OverviewView: View {
 }
 
 private struct SessionBriefSection: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let snap: SourceSnapshot
 
     private var brief: String? {
@@ -1103,7 +1288,7 @@ private struct TaskRow: View {
 }
 
 private struct FilesView: View {
-    @ObservedObject var model: SessionModel
+    @Bindable var model: SessionModel
     let snap: SourceSnapshot
     @State private var showAllFiles = false
 

@@ -50,8 +50,21 @@ enum Git {
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
+        let group = DispatchGroup()
+        group.enter()
+        var data = Data()
+        DispatchQueue.global(qos: .utility).async {
+            data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+            group.leave()
+        }
+        if group.wait(timeout: .now() + 3.0) == .timedOut {
+            p.terminate()
+            p.waitUntilExit()
+            _ = group.wait(timeout: .now() + 0.5)
+            return nil
+        }
         p.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard p.terminationStatus == 0 else { return nil }
         return String(data: data, encoding: .utf8)
     }
 }

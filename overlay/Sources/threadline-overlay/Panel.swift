@@ -75,9 +75,10 @@ final class OverlayController {
         _ = focusFrontmostTerminalContext()
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if panel.isVisible && frontmostPID == getpid() {
-            persistFrame()
-            panel.orderOut(nil)
+            hidePanel(reason: "toggle-frontmost")
         } else {
+            ensureOnScreen()
+            OverlayLog.write("window show reason=toggle visibleBefore=\(panel.isVisible)")
             panel.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -85,12 +86,14 @@ final class OverlayController {
 
     func show() {
         _ = focusFrontmostTerminalContext()
+        ensureOnScreen()
+        OverlayLog.write("window show reason=show visibleBefore=\(panel.isVisible)")
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func focus(cwd: String) -> Bool {
-        model.selectFolder(cwd: cwd)
+        model.selectSnapshot(cwd: cwd)
     }
 
     func focusFrontmostTerminalMessage() -> String {
@@ -98,8 +101,7 @@ final class OverlayController {
     }
 
     func hide() {
-        persistFrame()
-        panel.orderOut(nil)
+        hidePanel(reason: "command-hide")
     }
 
     @discardableResult
@@ -115,8 +117,7 @@ final class OverlayController {
             return false
         }
         if hidePanel {
-            persistFrame()
-            panel.orderOut(nil)
+            self.hidePanel(reason: "jump")
         }
         FileHandle.standardError.write(Data("jumped to \(result.appName) via \(result.detail)\n".utf8))
         return true
@@ -144,9 +145,15 @@ final class OverlayController {
             NSSound.beep()
             return "jump failed via \(result.detail)"
         }
-        persistFrame()
-        panel.orderOut(nil)
+        hidePanel(reason: "jump-message")
         return "jumped to \(result.appName) via \(result.detail)"
+    }
+
+    func jumpDebugMessage() -> String {
+        guard let snap = model.selectedSnapshot ?? model.selectedFolder?.latestSnapshot else {
+            return "no jump target"
+        }
+        return JumpBack.debugDescription(for: snap)
     }
 
     @discardableResult
@@ -180,6 +187,23 @@ final class OverlayController {
                                   forKey: OverlayController.frameDefaultsKey)
     }
 
+    private func hidePanel(reason: String) {
+        persistFrame()
+        OverlayLog.write("window hide reason=\(reason) visibleBefore=\(panel.isVisible)")
+        panel.orderOut(nil)
+    }
+
+    /// Saved frames from a disconnected monitor leave the window off-screen.
+    private func ensureOnScreen() {
+        let visible = NSScreen.screens.map(\.visibleFrame)
+        guard !visible.contains(where: { $0.intersects(panel.frame) }) else { return }
+        let target = NSScreen.main?.visibleFrame ?? visible[0]
+        var frame = panel.frame
+        frame.origin.x = target.midX - frame.width / 2
+        frame.origin.y = target.midY - frame.height / 2
+        panel.setFrame(frame, display: true)
+    }
+
     fileprivate static func isBareReturn(_ event: NSEvent) -> Bool {
         event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty &&
         (event.keyCode == 36 || event.keyCode == 76)
@@ -206,6 +230,13 @@ final class OverlayController {
 
 private final class FramePersistenceDelegate: NSObject, NSWindowDelegate {
     private static let key = "threadline.panel.frame"
+
+    /// Hide instead of closing — keeps the daemon running for the next show/toggle.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        OverlayLog.write("window hide reason=close-button visibleBefore=\(sender.isVisible)")
+        sender.orderOut(nil)
+        return false
+    }
 
     func windowDidMove(_ notification: Notification) { save(notification) }
     func windowDidResize(_ notification: Notification) { save(notification) }

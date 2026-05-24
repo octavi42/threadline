@@ -218,6 +218,64 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.nextAction, "Check usage")
     }
 
+    func testUsageTextInToolOutputDoesNotBlockRunningSession() {
+        var snap = baseSnapshot(state: .running)
+        snap.livePid = 42
+        snap.lastTool = "rg output mentioned another session: You're out of extra usage"
+        snap.note = "agent is active"
+
+        let work = WorkStatusResolver.resolveLive(snap)
+
+        XCTAssertEqual(work.status, .working)
+        XCTAssertNotEqual(work.nextAction, "Check usage")
+    }
+
+    func testApprovalTextInToolOutputDoesNotBlockRunningSession() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("threadline-approval-output-\(UUID().uuidString).jsonl")
+        let output = "swift test output included docs mentioning waiting for approval"
+        let records = [
+            #"{"type":"event_msg","payload":{"type":"user_message","message":"keep working on the overlay"}}"#,
+            #"{"type":"response_item","payload":{"type":"function_call_output","output":"\#(output)"}}"#,
+        ].joined(separator: "\n")
+        try records.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var snap = baseSnapshot(state: .running)
+        snap.livePid = 42
+        snap.jsonlPath = url.path
+        snap.lastText = "actively testing the app"
+
+        let work = WorkStatusResolver.resolveLive(snap)
+
+        XCTAssertEqual(work.status, .working)
+        XCTAssertNotEqual(work.nextAction, "Approve")
+    }
+
+    func testRunningSessionOverridesCachedNeedsYou() {
+        var snap = baseSnapshot(state: .running)
+        snap.livePid = 42
+        snap.lastText = "working on the current request"
+        snap.workState = WorkState(status: .needsYou,
+                                   reason: "usage limit reached",
+                                   nextAction: "Check usage",
+                                   rank: 0)
+
+        let work = WorkStatusResolver.resolveLive(snap)
+
+        XCTAssertEqual(work.status, .working)
+    }
+
+    func testCompletedLiveCodexSessionIsNotStillWorking() {
+        var snap = baseSnapshot(state: .idle)
+        snap.livePid = 42
+        snap.lastText = "Finished the current turn."
+
+        let work = WorkStatusResolver.resolveLive(snap)
+
+        XCTAssertEqual(work.status, .done)
+    }
+
     func testRiskyWhenCodeChangedWithoutEvidence() {
         var snap = baseSnapshot(state: .idle)
         snap.filesEdited = ["/tmp/Auth.swift", "/tmp/Router.swift"]
@@ -317,6 +375,53 @@ final class WorkStatusResolverTests: XCTestCase {
         XCTAssertEqual(work.status, .done)
     }
 
+    func testActivelyWorkingWithCodeChangesShowsWorkingNotRisky() {
+        var snap = baseSnapshot(state: .running)
+        snap.livePid = 42
+        snap.filesEdited = ["/tmp/A.swift"]
+        snap.lastTool = "Edit SessionModel.swift"
+        snap.updatedAt = Date()
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .working)
+        XCTAssertEqual(work.reason, "Edit SessionModel.swift")
+    }
+
+    func testIdleSessionWithPassedTestsRemainsReady() {
+        var snap = baseSnapshot(state: .idle)
+        snap.filesEdited = ["/tmp/A.swift"]
+        snap.lastText = "swift test passed"
+        snap.updatedAt = Date().addingTimeInterval(-600)
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertEqual(work.status, .ready)
+    }
+
+    func testMakeInboxRowsFlattensExpandedFolders() {
+        var snapA = baseSnapshot(state: .running, id: "a")
+        snapA.cwd = "/tmp/project"
+        var snapB = baseSnapshot(state: .idle, id: "b")
+        snapB.cwd = "/tmp/project"
+        let folder = SessionFolder(cwd: "/tmp/project",
+                                   snapshots: [snapA, snapB],
+                                   stats: SessionFolder.makeStats(from: [snapA, snapB]))
+        let rows = SessionGrouper.makeInboxRows(from: [folder], collapsedFolderIDs: [])
+        XCTAssertEqual(rows.map(\.id), ["folder:/tmp/project", "a", "b"])
+    }
+
+    func testMakeInboxRowsHidesCollapsedAgents() {
+        var snap = baseSnapshot(state: .running, id: "a")
+        snap.cwd = "/tmp/project"
+        let folder = SessionFolder(cwd: "/tmp/project",
+                                   snapshots: [snap],
+                                   stats: SessionFolder.makeStats(from: [snap]))
+        let rows = SessionGrouper.makeInboxRows(from: [folder],
+                                                collapsedFolderIDs: ["/tmp/project"])
+        XCTAssertEqual(rows.map(\.id), ["folder:/tmp/project"])
+    }
+
     func testStatusWordsAloneDoNotCreateFailedTests() {
         var snap = baseSnapshot(state: .idle)
         snap.lastText = "We discussed labels like Tests failed and Risky."
@@ -342,6 +447,15 @@ final class WorkStatusResolverTests: XCTestCase {
         let work = WorkStatusResolver.resolve(snap)
 
         XCTAssertEqual(work.status, .testsFailed)
+    }
+
+    func testLaterPassingSignalOverridesEarlierFailure() {
+        var snap = baseSnapshot(state: .idle)
+        snap.lastText = "Command failed with exit code: 1\nswift test passed"
+
+        let work = WorkStatusResolver.resolve(snap)
+
+        XCTAssertNotEqual(work.status, .testsFailed)
     }
 
     func testChangelogMentionOfRepeatedEditsIsNotStuck() {

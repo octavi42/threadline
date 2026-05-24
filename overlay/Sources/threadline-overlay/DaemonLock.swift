@@ -7,18 +7,27 @@ enum DaemonLock {
     private static var fd: Int32 = -1
 
     static var lockPath: String {
+        if let stateDir = ProcessInfo.processInfo.environment["THREADLINE_OVERLAY_STATE_DIR"],
+           !stateDir.isEmpty {
+            return (stateDir as NSString).appendingPathComponent("overlay.lock")
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/.threadline/overlay.lock"
     }
 
     /// Try to become the sole daemon. Returns false if another process holds the lock.
-    static func acquire() -> Bool {
+    static func acquire(retryAfterStale: Bool = true) -> Bool {
         IPC.ensureSocketDir()
         let path = lockPath
         let newFD = open(path, O_CREAT | O_RDWR, 0o600)
         guard newFD >= 0 else { return false }
         if flock(newFD, LOCK_EX | LOCK_NB) != 0 {
             close(newFD)
+            if retryAfterStale, let holder = holderPID(), holder > 0, kill(holder, 0) != 0 {
+                try? FileManager.default.removeItem(atPath: path)
+                try? FileManager.default.removeItem(atPath: IPC.socketPath)
+                return acquire(retryAfterStale: false)
+            }
             return false
         }
         if fd >= 0 { close(fd) }

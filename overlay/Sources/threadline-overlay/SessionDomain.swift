@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Combine
 
-enum SourceState: String, Equatable {
+enum SourceState: String, Equatable, Codable {
     case running    // assistant turn in progress
     case awaiting   // user input expected
     case idle       // recently finished
@@ -11,14 +11,14 @@ enum SourceState: String, Equatable {
     case none       // no session found
 }
 
-struct TaskItem: Equatable, Identifiable {
+struct TaskItem: Equatable, Identifiable, Codable {
     var id: String { content }
     let content: String
     let status: String   // "in_progress" | "completed" | "pending"
 }
 
 /// A single edit operation the agent performed on a file.
-struct FileEditOp: Equatable, Identifiable {
+struct FileEditOp: Equatable, Identifiable, Codable {
     /// Monotonic sequence number assigned at extraction time for stable identity.
     let seq: Int
     let tool: String       // "Edit" | "Write" | "MultiEdit" | "apply_patch"
@@ -39,7 +39,7 @@ struct FileEditOp: Equatable, Identifiable {
 }
 
 /// All edits the agent made to one file, with surrounding context.
-struct FileChangeGroup: Equatable, Identifiable {
+struct FileChangeGroup: Equatable, Identifiable, Codable {
     var id: String { path }
     let path: String
     var edits: [FileEditOp] = []
@@ -48,7 +48,7 @@ struct FileChangeGroup: Equatable, Identifiable {
     var retryCount: Int { max(0, edits.count - 1) }
 }
 
-struct SourceSnapshot: Identifiable, Equatable {
+struct SourceSnapshot: Identifiable, Equatable, Codable {
     let id: String              // "claude:/Users/foo/proj" — unique per session
     let tool: String            // "Claude" | "Codex" | "Cursor"
     let badge: String           // "CLD"   | "CDX"   | "CUR"
@@ -225,8 +225,16 @@ struct SourceSnapshot: Identifiable, Equatable {
     }
 
     var timeAgoShort: String {
+        timeAgoShort(relativeTo: Date())
+    }
+
+    func timeAgoShort(relativeTo now: Date) -> String {
+        Self.formatTimeAgo(from: updatedAt, relativeTo: now)
+    }
+
+    static func formatTimeAgo(from updatedAt: Date?, relativeTo now: Date) -> String {
         guard let t = updatedAt else { return "—" }
-        let s = Int(-t.timeIntervalSinceNow)
+        let s = max(0, Int(now.timeIntervalSince(t)))
         if s < 5            { return "now" }
         if s < 60           { return "\(s)s" }
         if s < 3600         { return "\(s / 60)m" }
@@ -405,4 +413,3 @@ struct FolderMergedFile: Identifiable, Equatable {
 
     var hasDiffContent: Bool { !edits.isEmpty }
 }
-

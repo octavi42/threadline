@@ -68,6 +68,10 @@ enum IPC {
         return fd
     }
 
+    static func removeSocket() {
+        unlink(socketPath)
+    }
+
     static func writeLine(_ fd: Int32, _ s: String) {
         let line = s + "\n"
         line.withCString { ptr in

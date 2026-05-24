@@ -6,7 +6,10 @@ enum Daemon {
     private static var controller: OverlayController?
     private static var model: SessionModel?
     private static var listenerFD: Int32 = -1
+    private static var listenerRunning = false
+    private static let listenerStateLock = NSLock()
     private static var hotKey: HotKey?
+    private static let appDelegate = AppDelegate()
 
     static func run() {
         // Exclusive lock — prevents two daemons (launchd + CLI spawn) from both
@@ -25,6 +28,8 @@ enum Daemon {
         let c = OverlayController(model: m)
         model = m
         controller = c
+        appDelegate.controller = c
+        app.delegate = appDelegate
 
         startSocketListener()
 
@@ -41,13 +46,16 @@ enum Daemon {
             FileHandle.standardError.write(Data("failed to bind socket at \(IPC.socketPath)\n".utf8))
             exit(1)
         }
+        listenerStateLock.lock()
         listenerFD = fd
+        listenerRunning = true
+        listenerStateLock.unlock()
 
         // Accept loop on a background dispatch queue. Permanent socket
         // failures (EBADF, ENOTSOCK) should be fatal — looping with no delay
         // would pin a CPU and produce no useful work.
         DispatchQueue.global(qos: .utility).async {
-            while true {
+            while isListenerRunning() {
                 let client = accept(fd, nil, nil)
                 if client >= 0 {
                     DispatchQueue.global(qos: .userInitiated).async {
@@ -61,9 +69,12 @@ enum Daemon {
                     // Transient — try again after a short pause.
                     usleep(10_000)
                 case EBADF, ENOTSOCK, EINVAL:
-                    FileHandle.standardError.write(
-                        Data("accept failed permanently (errno=\(err)); exiting\n".utf8))
-                    exit(1)
+                    if isListenerRunning() {
+                        FileHandle.standardError.write(
+                            Data("accept failed permanently (errno=\(err)); exiting\n".utf8))
+                        exit(1)
+                    }
+                    return
                 default:
                     // Unknown — log and try again, but don't spin.
                     FileHandle.standardError.write(
@@ -72,6 +83,23 @@ enum Daemon {
                 }
             }
         }
+    }
+
+    private static func isListenerRunning() -> Bool {
+        listenerStateLock.lock()
+        defer { listenerStateLock.unlock() }
+        return listenerRunning
+    }
+
+    private static func stopSocketListener() {
+        listenerStateLock.lock()
+        listenerRunning = false
+        let fd = listenerFD
+        listenerFD = -1
+        listenerStateLock.unlock()
+        guard fd >= 0 else { return }
+        close(fd)
+        IPC.removeSocket()
     }
 
     private static func handleClient(_ client: Int32) {
@@ -128,6 +156,8 @@ enum Daemon {
             model?.refresh(); return "ok"
         case "jump":
             return c.jumpToSelectionMessage()
+        case "jump-debug":
+            return c.jumpDebugMessage()
         case "list":
             let folders = model?.folders ?? []
             if folders.isEmpty { return "(no open agents)" }
@@ -144,15 +174,18 @@ enum Daemon {
             return snapshotsPayload(rest: rest, model: model)
         case "status":
             let f = c.panel.frame
-            let n = model?.snapshots.count ?? 0
+            let n = model?.allSnapshots.count ?? 0
             let selected = model?.selectedSnapshot?.cwd
                 ?? model?.selectedFolder?.cwd
                 ?? "none"
             let selectedKind = model?.selectedSnapshot?.badge ?? "folder"
             return "running pid=\(getpid()) visible=\(c.panel.isVisible) window=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height)) agents=\(n) selected=\(selectedKind):\(selected)"
         case "quit":
+            OverlayLog.write("daemon quit requested")
+            stopSocketListener()
+            DaemonLock.release()
+            IPC.removeSocket()
             DispatchQueue.main.async {
-                DaemonLock.release()
                 NSApp.terminate(nil)
             }
             return "bye"
@@ -169,13 +202,16 @@ enum Daemon {
         guard let model = model else {
             return "{\"error\":\"no model\"}"
         }
-        let rows: [[String: Any]] = model.snapshots.map { snap in
+        let rows: [[String: Any]] = model.allSnapshots.map { snap in
+            let live = JSONLAccess.sync { WorkStatusResolver.resolveLive(snap) }
             var row: [String: Any] = [
                 "id": snap.id,
                 "tool": snap.tool,
                 "badge": snap.badge,
                 "cwd": snap.cwd ?? "",
-                "workStatus": snap.workState.status.rawValue,
+                "workStatus": live.status.rawValue,
+                "workReason": live.reason,
+                "nextAction": live.nextAction,
                 "state": snap.state.rawValue,
                 "activityLine": snap.activityLine,
             ]
@@ -188,7 +224,7 @@ enum Daemon {
         let liveCursorAgents = LiveAgents.liveSessions().filter { $0.tool == "Cursor" }.count
         let payload: [String: Any] = [
             "daemonPid": Int(getpid()),
-            "agentCount": model.snapshots.count,
+            "agentCount": model.allSnapshots.count,
             "inboxAgentCount": model.inboxSnapshotCount,
             "hiddenCursorHistoryCount": model.hiddenCursorHistoryCount,
             "showCursorHistorySessions": model.showCursorHistorySessions,

@@ -1,6 +1,6 @@
 import Foundation
 
-enum WorkStatus: String, Equatable {
+enum WorkStatus: String, Equatable, Codable {
     case needsYou = "Needs you"
     case testsFailed = "Tests failed"
     case stuck = "Stuck"
@@ -10,7 +10,7 @@ enum WorkStatus: String, Equatable {
     case done = "Done"
 }
 
-struct WorkState: Equatable {
+struct WorkState: Equatable, Codable {
     let status: WorkStatus
     let reason: String
     let nextAction: String
@@ -32,18 +32,18 @@ enum WorkStatusResolver {
         return parts.joined(separator: "\n").lowercased()
     }
 
-    /// User asks + tool output only — never assistant prose (avoids doc/table false positives).
-    static func blockerEvidence(for snap: SourceSnapshot) -> String {
-        var parts: [String] = []
-        if let task = snap.currentTask { parts.append(task) }
-        if let path = snap.jsonlPath,
-           let tail = SessionTranscriptCache.activeUserAndToolEvidence(fromJSONL: path, maxBytes: 96 * 1024) {
-            parts.append(tail)
-        } else {
-            if let text = snap.lastText { parts.append(text) }
-            if let note = snap.note { parts.append(note) }
-        }
-        return parts.joined(separator: "\n").lowercased()
+    /// Snapshot-owned text only. Use this for account/quota blockers so a
+    /// grep result or pasted transcript from another session does not poison
+    /// the current session.
+    static func blockerHeadline(for snap: SourceSnapshot) -> String {
+        [
+            snap.currentTask,
+            snap.lastText,
+            snap.note,
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n")
+        .lowercased()
     }
 
     /// Assistant + user + tool text for test pass/fail detection.
@@ -85,15 +85,58 @@ enum WorkStatusResolver {
         resolveCacheLock.unlock()
     }
 
+    /// Time-aware status for UI — re-evaluates Working vs Risky/Done on each call.
+    static func resolveLive(_ snap: SourceSnapshot, now: Date = Date()) -> WorkState {
+        if snap.state == .running {
+            let headline = blockerHeadline(for: snap)
+            if let blocked = blockedReason(headline: headline) {
+                return WorkState(status: .needsYou,
+                                 reason: blocked,
+                                 nextAction: nextActionForBlocker(blocked),
+                                 rank: 0)
+            }
+            let kind = sessionKind(for: snap, evidence: searchableText(snap).lowercased())
+            return WorkState(status: .working,
+                             reason: workingReason(snap),
+                             nextAction: workingNextAction(snap, kind: kind),
+                             rank: 5)
+        }
+
+        let stable = resolveStable(snap)
+        let active = isActivelyWorking(snap, now: now)
+        if active {
+            let fresh = resolve(snap)
+            if fresh.status == .working || fresh.status == .needsYou || fresh.status == .testsFailed || fresh.status == .stuck {
+                return fresh
+            }
+            if stable.status == .risky || stable.status == .ready {
+                return fresh
+            }
+            return stable
+        }
+
+        switch stable.status {
+        case .needsYou, .testsFailed, .stuck:
+            return stable
+        default:
+            break
+        }
+
+        if stable.status == .working {
+            return resolve(snap)
+        }
+        return stable
+    }
+
     static func resolve(_ snap: SourceSnapshot) -> WorkState {
         let text = evidenceText(for: snap)
-        let blockerText = blockerEvidence(for: snap)
+        let blockerHeadline = blockerHeadline(for: snap)
         let kind = sessionKind(for: snap, evidence: text)
         let codeChanged = hasCodeChanges(snap)
         let testText = testEvidenceText(for: snap)
         let testsPassed = hasPassedTestSignal(in: testText)
         let testsFailed = hasFailedTestSignal(in: testText)
-        let blocked = blockedReason(in: blockerText)
+        let blocked = blockedReason(headline: blockerHeadline)
 
         if let blocked {
             return WorkState(status: .needsYou,
@@ -109,14 +152,14 @@ enum WorkStatusResolver {
                              rank: 0)
         }
 
-        if testsFailed {
+        if testsFailed && !testsPassed {
             return WorkState(status: .testsFailed,
                              reason: "test or CI failure detected",
                              nextAction: "Inspect failure",
                              rank: 1)
         }
 
-        if isStuck(snap, text: text) {
+        if !testsPassed && isStuck(snap, text: text) {
             return WorkState(status: .stuck,
                              reason: stuckReason(snap, text: text),
                              nextAction: "Jump back",
@@ -132,11 +175,16 @@ enum WorkStatusResolver {
                              rank: 7)
         }
 
-        if kind == .research, !codeChanged, isActivelyWorking(snap) || snap.state == .running {
-            let reason = researchReason(snap)
+        if isActivelyWorking(snap) {
+            let reason = kind == .research && !codeChanged
+                ? researchReason(snap)
+                : workingReason(snap)
+            let next = kind == .research && !codeChanged
+                ? "Synthesize findings"
+                : workingNextAction(snap, kind: kind)
             return WorkState(status: .working,
                              reason: reason,
-                             nextAction: "Synthesize findings",
+                             nextAction: next,
                              rank: 5)
         }
 
@@ -154,13 +202,6 @@ enum WorkStatusResolver {
                              reason: changeSummary(snap, suffix: "no test evidence"),
                              nextAction: next,
                              rank: 3)
-        }
-
-        if isActivelyWorking(snap) {
-            return WorkState(status: .working,
-                             reason: workingReason(snap),
-                             nextAction: workingNextAction(snap, kind: kind),
-                             rank: 5)
         }
 
         if snap.state == .stale {
@@ -245,11 +286,16 @@ enum WorkStatusResolver {
         return false
     }
 
+    /// How long a live agent can go without JSONL writes and still count as active.
+    static let liveActivityWindow: TimeInterval = 120
+
     static func isActivelyWorking(_ snap: SourceSnapshot, now: Date = Date()) -> Bool {
         if snap.state == .running { return true }
+        // Codex reports task_started/task_complete while the TUI process stays
+        // attached at the prompt. Its completed turn is not active work.
+        if snap.tool == "Codex" { return false }
         guard snap.livePid != nil, let updatedAt = snap.updatedAt else { return false }
-        // Live CLI process but idle: only "working" if the log changed very recently.
-        return now.timeIntervalSince(updatedAt) < 30
+        return now.timeIntervalSince(updatedAt) < liveActivityWindow
     }
 
     // MARK: - evidence
@@ -291,20 +337,30 @@ enum WorkStatusResolver {
         }
     }
 
-    private static func blockedReason(in text: String) -> String? {
-        if text.contains("out of extra usage") || text.contains("out of usage") {
+    private static func blockedReason(headline: String) -> String? {
+        let directHeadline = headline
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.contains("|") }
+            .joined(separator: "\n")
+
+        if directHeadline.contains("out of extra usage") || directHeadline.contains("out of usage") {
             return "usage limit reached"
         }
-        if text.contains("does not have access") || text.contains("authentication_failed") {
+        if directHeadline.contains("does not have access") || directHeadline.contains("authentication_failed") {
             return "login required"
         }
-        if text.contains("please run /login") {
+        if directHeadline.contains("please run /login") {
             return "login required"
         }
-        if text.contains("waiting for approval") || text.contains("approval to run") {
+        let headlineLines = directHeadline
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if headlineLines.contains(where: {
+            $0.hasPrefix("waiting for approval") || $0.hasPrefix("approval to run")
+        }) {
             return "waiting for approval"
         }
-        if text.contains("permission denied") {
+        if directHeadline.contains("permission denied") {
             return "permission denied"
         }
         return nil
@@ -458,19 +514,25 @@ enum WorkStatusResolver {
 }
 
 extension SourceSnapshot {
-    /// Fill work status, task counts, and per-file line totals once per refresh.
-    static func withDerivedFields(_ snap: SourceSnapshot) -> SourceSnapshot {
+    /// Fill task counts and per-file line totals without touching transcript files.
+    static func withStructuralDerivedFields(_ snap: SourceSnapshot) -> SourceSnapshot {
         var s = snap
         s.tasksDone = s.tasks.filter { $0.status == "completed" }.count
         s.tasksInProgress = s.tasks.filter { $0.status == "in_progress" }.count
         s.tasksPending = s.tasks.filter { $0.status == "pending" }.count
-        s.workState = WorkStatusResolver.resolveStable(s)
         s.fileChanges = s.fileChanges.map { group in
             var g = group
             g.linesAdded = g.edits.reduce(0) { $0 + $1.rawLinesAdded }
             g.linesRemoved = g.edits.reduce(0) { $0 + $1.rawLinesRemoved }
             return g
         }
+        return s
+    }
+
+    /// Fill work status, task counts, and per-file line totals once per refresh.
+    static func withDerivedFields(_ snap: SourceSnapshot) -> SourceSnapshot {
+        var s = withStructuralDerivedFields(snap)
+        s.workState = WorkStatusResolver.resolveStable(s)
         return s
     }
 }

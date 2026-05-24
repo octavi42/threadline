@@ -277,7 +277,7 @@ final class Summarizer {
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         p.waitUntilExit()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+        let out = String(data: (try? pipe.fileHandleForReading.readToEnd()) ?? Data(),
                          encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (out?.isEmpty == false && FileManager.default.isExecutableFile(atPath: out!)) ? out : nil
     }
@@ -304,7 +304,7 @@ final class Summarizer {
         group.enter()
         var stdoutData = Data()
         DispatchQueue.global(qos: .utility).async {
-            stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            stdoutData = (try? outputPipe.fileHandleForReading.readToEnd()) ?? Data()
             group.leave()
         }
         if group.wait(timeout: .now() + timeout) == .timedOut {

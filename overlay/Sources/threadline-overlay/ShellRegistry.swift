@@ -108,6 +108,34 @@ final class ShellRegistry {
         return nil
     }
 
+    /// Direct lookup for a shell PID that has reported via the prompt hook.
+    func shell(forShellPid pid: pid_t) -> Scope? {
+        lock.lock(); defer { lock.unlock() }
+        prune()
+        guard let entry = entries[pid] else { return nil }
+        return Scope(shellPid: entry.pid,
+                     cwd: entry.cwd,
+                     tty: entry.tty,
+                     terminal: entry.terminal)
+    }
+
+    /// Most recent terminal identity recorded for an exact TTY match.
+    func terminalIdentity(matchingTTY tty: String?) -> TerminalIdentity? {
+        guard let want = TerminalIdentityResolver.normalizeTTY(tty) else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        prune()
+        let sorted = entries.values.sorted { $0.touchedAt > $1.touchedAt }
+        for entry in sorted {
+            if TerminalIdentityResolver.normalizeTTY(entry.tty) == want {
+                return entry.terminal
+            }
+            if TerminalIdentityResolver.normalizeTTY(entry.terminal?.tty) == want {
+                return entry.terminal
+            }
+        }
+        return nil
+    }
+
     /// Compatibility shortcut: cwd only.
     func scopeCwd(terminalPid: pid_t) -> String? {
         scope(terminalPid: terminalPid)?.cwd

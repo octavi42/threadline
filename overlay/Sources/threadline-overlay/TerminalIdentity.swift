@@ -203,7 +203,7 @@ enum TerminalIdentityResolver {
                 return nil
             }
             guard task.terminationStatus == 0 else { return nil }
-            let data = out.fileHandleForReading.readDataToEndOfFile()
+            let data = (try? out.fileHandleForReading.readToEnd()) ?? Data()
             let text = String(data: data, encoding: .utf8) ?? ""
             return text.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {

@@ -62,6 +62,7 @@ enum LaunchAgent {
             "ProgramArguments": [target, "daemon"],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],
+            "ThrottleInterval": 0,
             "ProcessType": "Interactive",
             "StandardOutPath": "\(home)/.threadline/overlay.log",
             "StandardErrorPath": "\(home)/.threadline/overlay.log"
@@ -147,7 +148,7 @@ enum LaunchAgent {
         task.standardError = FileHandle.nullDevice
         guard (try? task.run()) != nil else { return }
         task.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
         guard let text = String(data: data, encoding: .utf8) else { return }
         for line in text.split(separator: "\n") {
             guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)), pid > 0 else { continue }

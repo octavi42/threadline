@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pre-split diff text for SwiftUI — avoids `components(separatedBy:)` in view bodies.
-struct DiffDisplay: Equatable {
+struct DiffDisplay: Equatable, Codable {
     let lines: [String]
     let totalLineCount: Int
 
